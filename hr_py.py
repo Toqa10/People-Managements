@@ -8,138 +8,144 @@ Original file is located at
 """
 import streamlit as st
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
+import seaborn as sns
 from io import BytesIO
-import base64
 
-# ===================== #
-# 1. Load Data
-# ===================== #
+# تحميل البيانات
 @st.cache_data
 def load_data():
     employee = pd.read_csv("employee.csv")
+    department = pd.read_csv("department.csv")
     salary = pd.read_csv("salary.csv")
     title = pd.read_csv("title.csv")
-    department = pd.read_csv("department.csv")
-    dept_emp = pd.read_csv("department_employee.csv")
-    return employee, salary, title, department, dept_emp
+    return employee, department, salary, title
 
-employee, salary, title, department, dept_emp = load_data()
+employee, department, salary, title = load_data()
 
-# ===================== #
-# 2. Helper to download charts
-# ===================== #
-def get_image_download_link(fig):
-    buffer = BytesIO()
-    fig.savefig(buffer, format='png')
-    buffer.seek(0)
-    b64 = base64.b64encode(buffer.read()).decode()
-    href = f'<a href="data:file/png;base64,{b64}" download="chart.png">📥 Download Chart</a>'
-    return href
+# دمج البيانات
+df = employee.merge(department, on='dept_id', how='left')\
+             .merge(salary, on='emp_id', how='left')\
+             .merge(title, on='emp_id', how='left')
 
-# ===================== #
-# 3. Custom CSS for styling
-# ===================== #
+# تهيئة الصفحة
+st.set_page_config(page_title="HR Analytics", layout="wide")
+
+# CSS لتجميل الواجهة
 st.markdown("""
-    <style>
-        .main-title {
-            text-align: center;
-            font-size: 36px;
-            color: #2c3e50;
-        }
-        .sub-title {
-            text-align: center;
-            font-size: 20px;
-            color: #34495e;
-        }
-        .chart-explanation {
-            text-align: center;
-            color: #555;
-            margin-top: 10px;
-        }
-        .stButton button {
-            width: 100%;
-            padding: 10px;
-            font-size: 18px;
-        }
-        .chart-container {
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            padding: 20px;
-            background-color: #f9f9f9;
-            margin-top: 20px;
-        }
-    </style>
+<style>
+h1, h2, h3 {
+    color: #0E4D92;
+    text-align: center;
+}
+.stButton button {
+    background-color: #0E4D92;
+    color: white;
+    font-weight: bold;
+    border-radius: 10px;
+}
+input[type="text"] {
+    border: 2px solid #0E4D92;
+    border-radius: 8px;
+}
+.chart-container {
+    text-align: center;
+    padding: 10px;
+}
+.explanation {
+    color: #333;
+    font-size: 15px;
+    text-align: center;
+    margin-bottom: 30px;
+}
+</style>
 """, unsafe_allow_html=True)
 
-# ===================== #
-# 4. Title and Input UI
-# ===================== #
-st.markdown("<div class='main-title'>📊 HR Analytics Dashboard</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-title'>Ask any HR insight question and get a chart instantly!</div>", unsafe_allow_html=True)
+st.title("📊 HR Analytics Dashboard")
 
-st.write("")
-
-user_input = st.text_input("💬 Enter your HR Question here:")
-
-col1, col2 = st.columns([1, 1])
-submit = col1.button("🚀 Submit")
-clear = col2.button("❌ Clear")
-
-# ===================== #
-# 5. Question Handler
-# ===================== #
-def show_chart(fig, explanation):
-    st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-    st.pyplot(fig)
-    st.markdown(f'<div class="chart-explanation">{explanation}</div>', unsafe_allow_html=True)
-    st.markdown(get_image_download_link(fig), unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-if submit:
-    if "gender" in user_input.lower():
-        gender_title = pd.merge(employee, title, on="emp_id")
-        fig, ax = plt.subplots()
-        sns.countplot(data=gender_title, x="gender", hue="title", ax=ax)
-        ax.set_title("Gender Distribution by Job Title")
-        show_chart(fig, "This chart shows how males and females are distributed across different job titles.")
-    elif "promotion" in user_input.lower():
-        current_year = 2025
-        employee["last_promotion_year"] = pd.to_datetime(employee["last_promotion_date"]).dt.year
-        employee["years_since_promotion"] = current_year - employee["last_promotion_year"]
-        fig, ax = plt.subplots()
-        sns.histplot(employee["years_since_promotion"], bins=10, kde=True, ax=ax)
-        ax.set_title("Years Since Last Promotion")
-        show_chart(fig, "This histogram shows how long it's been since employees last received a promotion.")
-    elif "salary" in user_input.lower() and "growth" in user_input.lower():
-        salary["from_date"] = pd.to_datetime(salary["from_date"])
-        salary["year"] = salary["from_date"].dt.year
-        avg_salary_by_year = salary.groupby("year")["salary"].mean().reset_index()
-        fig, ax = plt.subplots()
-        sns.lineplot(data=avg_salary_by_year, x="year", y="salary", marker="o", ax=ax)
-        ax.set_title("Average Salary Growth Over Time")
-        show_chart(fig, "This line chart shows the trend in average salary over the years.")
-    elif "stable" in user_input.lower() or "stability" in user_input.lower():
-        emp_dept = pd.merge(dept_emp, department, on="dept_id")
-        emp_count = emp_dept["dept_name"].value_counts()
-        fig, ax = plt.subplots()
-        emp_count.plot(kind="bar", ax=ax)
-        ax.set_title("Employee Count per Department")
-        ax.set_ylabel("Number of Employees")
-        show_chart(fig, "This chart shows the number of employees in each department (an indicator of stability).")
-    elif "turnover" in user_input.lower():
-        left_employees = employee[employee["status"] == "Left"]
-        turnover_by_dept = pd.merge(left_employees, dept_emp, on="emp_id")
-        turnover_by_dept = pd.merge(turnover_by_dept, department, on="dept_id")
-        turnover_count = turnover_by_dept["dept_name"].value_counts()
-        fig, ax = plt.subplots()
-        turnover_count.plot(kind="bar", color="tomato", ax=ax)
-        ax.set_title("Turnover by Department")
-        ax.set_ylabel("Number of Employees Left")
-        show_chart(fig, "This bar chart shows departments with the highest employee turnover.")
-    else:
-        st.warning("❗This data is restricted or unsupported question.")
+# إدخال السؤال
+col1, col2 = st.columns([4, 1])
+with col1:
+    user_question = st.text_input("اكتب سؤالك هنا (مثال: توزيع الوظائف حسب النوع)", key="input_text")
+with col2:
+    submit = st.button("✅ Submit")
+clear = st.button("🗑️ Clear")
 
 if clear:
     st.experimental_rerun()
+
+def download_button(fig, filename):
+    buf = BytesIO()
+    fig.savefig(buf, format="png")
+    st.download_button("📥 تحميل الصورة", data=buf.getvalue(), file_name=filename, mime="image/png")
+
+# رسم الرسومات والتحليلات
+if submit and user_question:
+    matched = False
+
+    def show_chart(fig, explanation):
+        st.pyplot(fig)
+        st.markdown(f'<div class="explanation">{explanation}</div>', unsafe_allow_html=True)
+        download_button(fig, "chart.png")
+
+    # 1. توزيع الوظائف حسب النوع
+    if "توزيع الوظائف حسب النوع" in user_question:
+        matched = True
+        fig, ax = plt.subplots()
+        sns.countplot(data=df, x='gender', hue='job_title', ax=ax)
+        ax.set_title("توزيع الوظائف حسب النوع")
+        show_chart(fig, "يوضح هذا الرسم توزيع المسميات الوظيفية حسب الجنس.")
+
+    # 2. الوقت منذ آخر ترقية حسب القسم
+    elif "الوقت منذ آخر ترقية" in user_question:
+        matched = True
+        df['last_promotion_year'] = pd.to_datetime(df['last_promotion_date']).dt.year
+        df['years_since_promotion'] = 2025 - df['last_promotion_year']
+        avg_promotion = df.groupby('dept_name')['years_since_promotion'].mean().sort_values()
+        fig, ax = plt.subplots()
+        avg_promotion.plot(kind='barh', ax=ax, color='skyblue')
+        ax.set_title("متوسط عدد السنوات منذ آخر ترقية حسب القسم")
+        show_chart(fig, "يوضح هذا الرسم عدد السنوات التي مرت منذ آخر ترقية للموظفين في كل قسم.")
+
+    # 3. الفجوة في الرواتب بين الجنسين
+    elif "الفجوة في الرواتب" in user_question or "الراتب حسب الجنس" in user_question:
+        matched = True
+        avg_salary = df.groupby('gender')['salary'].mean()
+        fig, ax = plt.subplots()
+        avg_salary.plot(kind='bar', color=['#FF69B4', '#00BFFF'], ax=ax)
+        ax.set_title("متوسط الرواتب حسب الجنس")
+        show_chart(fig, "يوضح هذا الرسم الفجوة المحتملة في الرواتب بين الذكور والإناث.")
+
+    # 4. استقرار الموظفين في الأقسام
+    elif "استقرار" in user_question or "الاستقرار الوظيفي" in user_question:
+        matched = True
+        df['tenure'] = pd.to_datetime(df['exit_date'].fillna('2025'))\
+                        .dt.year - pd.to_datetime(df['hire_date']).dt.year
+        avg_tenure = df.groupby('dept_name')['tenure'].mean().sort_values()
+        fig, ax = plt.subplots()
+        avg_tenure.plot(kind='barh', ax=ax, color='lightgreen')
+        ax.set_title("متوسط مدة بقاء الموظف في كل قسم")
+        show_chart(fig, "يوضح هذا الرسم مدى استقرار الموظفين داخل كل قسم.")
+
+    # 5. الترقيات حسب النوع
+    elif "الترقيات حسب النوع" in user_question or "الترقيات بين الذكور والإناث" in user_question:
+        matched = True
+        df['was_promoted'] = df['last_promotion_date'].notna()
+        promotions_by_gender = df.groupby('gender')['was_promoted'].mean()
+        fig, ax = plt.subplots()
+        promotions_by_gender.plot(kind='bar', color=['#FF69B4', '#00BFFF'], ax=ax)
+        ax.set_title("نسبة الترقيات حسب النوع")
+        show_chart(fig, "يوضح هذا الرسم ما إذا كان هناك تفاوت في الترقيات بين الذكور والإناث.")
+
+    # 6. الرواتب حسب الأقسام
+    elif "الرواتب حسب القسم" in user_question or "متوسط الرواتب حسب القسم" in user_question:
+        matched = True
+        avg_salary_dept = df.groupby('dept_name')['salary'].mean().sort_values()
+        fig, ax = plt.subplots()
+        avg_salary_dept.plot(kind='barh', ax=ax, color='orange')
+        ax.set_title("متوسط الرواتب حسب القسم")
+        show_chart(fig, "يوضح هذا الرسم مقارنة الرواتب بين الأقسام المختلفة.")
+
+    if not matched:
+        st.warning("❌ هذا السؤال غير مدعوم حاليًا أو البيانات المطلوبة غير متاحة.")
+
