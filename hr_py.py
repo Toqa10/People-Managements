@@ -92,7 +92,7 @@ def load_data():
         try_read("department_employee.csv"),
         try_read("employee.csv"),
         try_read("department.csv"),
-        try_read("salary_sample.csv"),
+        try_read("salary.csv"),
         try_read("title.csv"),
         try_read("department_manager.csv")
     )
