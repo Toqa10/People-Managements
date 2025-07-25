@@ -12,166 +12,118 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import io
 
-# إعداد صفحة التطبيق
-st.set_page_config(page_title="💼 HR Analytics Dashboard", layout="wide", page_icon="📊")
-st.markdown("<h1 style='text-align: center; color: #4CAF50;'>📊 HR Analytics Dashboard</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center;'>Interactive insights on employee data, salary, tenure, and more</p>", unsafe_allow_html=True)
-st.markdown("---")
+# ==================== PAGE SETUP ====================
+st.set_page_config(page_title="📊 HR Analytics Dashboard", page_icon="📁", layout="wide")
 
-# تحميل البيانات
-@st.cache_data
-def load_data():
-    employees = pd.read_csv("employee.csv")
-    salaries = pd.read_csv("salary.csv")
-    departments = pd.read_csv("department.csv")
-    titles = pd.read_csv("title.csv")
-    return employees, salaries, departments, titles
+# ==================== CUSTOM CSS ====================
+st.markdown("""
+<style>
+.stApp {
+    background-color: #f0f2f6;
+}
+h1, h2, h3 {
+    text-align: center;
+    color: #0f4c81;
+}
+.chart-explanation {
+    text-align: center;
+    font-size: 16px;
+    color: #444;
+    margin-top: 10px;
+}
+.stButton>button {
+    background-color: #0f4c81;
+    color: white;
+    font-weight: bold;
+    border-radius: 8px;
+    padding: 8px 24px;
+    margin: 5px;
+}
+.stFileUploader {
+    border: 2px dashed #0f4c81;
+}
+</style>
+""", unsafe_allow_html=True)
 
-employees, salaries, departments, titles = load_data()
+# ==================== TITLE ====================
+st.markdown("## 📊 Welcome to the HR Analytics Dashboard")
 
-# دمج البيانات
-data = employees.merge(salaries, on="emp_no").merge(departments, on="emp_no").merge(titles, on="emp_no")
-data['hire_date'] = pd.to_datetime(data['hire_date'])
-data['birth_date'] = pd.to_datetime(data['birth_date'])
-data['tenure'] = 2025 - data['hire_date'].dt.year
-data['age'] = 2025 - data['birth_date'].dt.year
+# ==================== FILE UPLOAD ====================
+st.subheader("📂 Upload your HR dataset (CSV files only)")
+uploaded_file = st.file_uploader("Choose your main HR file (employee.csv)", type="csv")
 
-# دالة تحميل الشارت
-def download_chart(fig, filename):
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight")
-    st.download_button("📥 Download Chart", data=buf.getvalue(), file_name=filename, mime="image/png")
+# ==================== QUESTION HANDLING ====================
+st.subheader("💬 Ask your HR question")
 
-# واجهة جانبية أنيقة
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/4712/4712109.png", width=120)
-st.sidebar.title("🔍 Explore Insights")
-tabs = st.sidebar.radio("Choose Insight", [
-    "💰 Highest Salary per Department",
-    "📈 Salary Growth Over Time",
-    "👫 Gender Salary Comparison",
-    "📊 Tenure vs Salary",
-    "📉 Avg Tenure by Department",
-    "💸 Total Salary by Department",
-    "🧑‍💼 Title by Gender",
-    "🧾 Hiring Trend Over Time",
-    "📊 Salary Gap by Gender & Dept",
-    "🎯 Age vs Promotions",
-    "🔥 Attrition Risk"
-])
+question = st.text_input("Type your question here...", placeholder="e.g. What is the gender distribution across job titles?")
+submit = st.button("Submit")
+clear = st.button("Clear")
 
-# رسومات بيانية منظمة حسب الاختيار
-if tabs == "💰 Highest Salary per Department":
-    st.subheader("💰 Highest Salary Found Per Department")
-    fig, ax = plt.subplots()
-    highest_salary = data.groupby('dept_name')['salary'].max().sort_values(ascending=False)
-    sns.barplot(x=highest_salary.values, y=highest_salary.index, ax=ax, palette="viridis")
-    ax.set_xlabel("Highest Salary")
-    st.pyplot(fig)
-    st.markdown("*This chart shows the maximum salary found in each department.*")
-    download_chart(fig, "highest_salary_per_department.png")
+if clear:
+    st.experimental_rerun()
 
-elif tabs == "📈 Salary Growth Over Time":
-    st.subheader("📈 Average Annual Salary Growth")
-    fig, ax = plt.subplots()
-    salaries['from_date'] = pd.to_datetime(salaries['from_date'])
-    salaries['year'] = salaries['from_date'].dt.year
-    avg_growth = salaries.groupby('year')['salary'].mean()
-    sns.lineplot(x=avg_growth.index, y=avg_growth.values, marker='o', ax=ax)
-    ax.set_ylabel("Average Salary")
-    st.pyplot(fig)
-    st.markdown("*This chart displays how average salaries changed over the years.*")
-    download_chart(fig, "average_salary_growth.png")
+# ==================== PROCESSING ====================
+if uploaded_file and submit and question:
+    try:
+        df = pd.read_csv(uploaded_file)
 
-elif tabs == "👫 Gender Salary Comparison":
-    st.subheader("👫 Average Salary by Gender")
-    fig, ax = plt.subplots()
-    avg_gender_salary = data.groupby("gender")["salary"].mean()
-    sns.barplot(x=avg_gender_salary.index, y=avg_gender_salary.values, palette="pastel", ax=ax)
-    ax.set_ylabel("Average Salary")
-    st.pyplot(fig)
-    st.markdown("*This chart compares average salaries between genders.*")
-    download_chart(fig, "salary_by_gender.png")
+        # Example visualizations based on keyword matching
+        if "gender" in question.lower() and "title" in question.lower():
+            fig, ax = plt.subplots(figsize=(10, 5))
+            sns.countplot(data=df, x='title', hue='gender', palette='pastel', ax=ax)
+            ax.set_title("Gender Distribution Across Job Titles", fontsize=14)
+            ax.set_xlabel("Job Title")
+            ax.set_ylabel("Count")
+            plt.xticks(rotation=45)
+            st.pyplot(fig)
+            st.markdown("<div class='chart-explanation'>يوضح هذا الرسم التوزيع بين الجنسين في كل مسمّى وظيفي.</div>", unsafe_allow_html=True)
 
-elif tabs == "📊 Tenure vs Salary":
-    st.subheader("📊 Employee Tenure vs Salary")
-    fig, ax = plt.subplots()
-    sns.scatterplot(data=data, x='tenure', y='salary', hue='gender', ax=ax)
-    st.pyplot(fig)
-    st.markdown("*This chart explores the relationship between tenure and salary.*")
-    download_chart(fig, "tenure_vs_salary.png")
+        elif "tenure" in question.lower() or "average years" in question.lower():
+            if "department" in df.columns and "tenure" in df.columns:
+                avg_tenure = df.groupby("department")["tenure"].mean().sort_values()
+                fig, ax = plt.subplots(figsize=(10, 5))
+                avg_tenure.plot(kind='barh', color='#0f4c81', ax=ax)
+                ax.set_title("Average Tenure per Department")
+                ax.set_xlabel("Years")
+                st.pyplot(fig)
+                st.markdown("<div class='chart-explanation'>يوضح هذا الرسم عدد سنوات العمل في كل قسم كمعدل.</div>", unsafe_allow_html=True)
 
-elif tabs == "📉 Avg Tenure by Department":
-    st.subheader("📉 Average Tenure per Department")
-    fig, ax = plt.subplots()
-    avg_tenure = data.groupby('dept_name')['tenure'].mean().sort_values()
-    sns.barplot(x=avg_tenure.values, y=avg_tenure.index, ax=ax, palette="coolwarm")
-    ax.set_xlabel("Average Tenure (Years)")
-    st.pyplot(fig)
-    st.markdown("*This chart shows the average employee tenure per department.*")
-    download_chart(fig, "avg_tenure_department.png")
+        elif "promotion" in question.lower() and "years" in question.lower():
+            if "last_promotion_years" in df.columns:
+                fig, ax = plt.subplots()
+                sns.histplot(df["last_promotion_years"], bins=10, kde=True, color="#0f4c81", ax=ax)
+                ax.set_title("Years Since Last Promotion")
+                ax.set_xlabel("Years")
+                ax.set_ylabel("Count")
+                st.pyplot(fig)
+                st.markdown("<div class='chart-explanation'>يوضح هذا الرسم عدد السنوات منذ آخر ترقية لكل موظف.</div>", unsafe_allow_html=True)
 
-elif tabs == "💸 Total Salary by Department":
-    st.subheader("💸 Total Salary Paid per Department")
-    fig, ax = plt.subplots()
-    total_salary = data.groupby("dept_name")["salary"].sum().sort_values()
-    sns.barplot(x=total_salary.values, y=total_salary.index, palette="flare", ax=ax)
-    ax.set_xlabel("Total Salary")
-    st.pyplot(fig)
-    st.markdown("*This chart displays total salary payouts by department.*")
-    download_chart(fig, "total_salary_department.png")
+        elif "salary" in question.lower() and "gender" in question.lower():
+            if "salary" in df.columns and "gender" in df.columns:
+                fig, ax = plt.subplots(figsize=(6, 4))
+                sns.boxplot(data=df, x="gender", y="salary", palette="Set2", ax=ax)
+                ax.set_title("Salary Distribution by Gender")
+                st.pyplot(fig)
+                st.markdown("<div class='chart-explanation'>يوضح هذا الرسم الفروقات في المرتبات بين الذكور والإناث.</div>", unsafe_allow_html=True)
 
-elif tabs == "🧑‍💼 Title by Gender":
-    st.subheader("🧑‍💼 Employee Count by Title and Gender")
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.countplot(data=data, y="title", hue="gender", ax=ax)
-    st.pyplot(fig)
-    st.markdown("*This chart shows the job title distribution by gender.*")
-    download_chart(fig, "title_by_gender.png")
+        elif "turnover" in question.lower() or "attrition" in question.lower():
+            if "department" in df.columns and "attrition" in df.columns:
+                dept_attr = df[df["attrition"] == "Yes"]["department"].value_counts()
+                fig, ax = plt.subplots()
+                dept_attr.plot(kind='bar', color='#ff6f61', ax=ax)
+                ax.set_title("Departments with Highest Turnover")
+                ax.set_ylabel("Attritions")
+                st.pyplot(fig)
+                st.markdown("<div class='chart-explanation'>يوضح هذا الرسم عدد الاستقالات في كل قسم.</div>", unsafe_allow_html=True)
 
-elif tabs == "🧾 Hiring Trend Over Time":
-    st.subheader("🧾 Hiring Trend Over Time")
-    fig, ax = plt.subplots()
-    data['hire_year'] = data['hire_date'].dt.year
-    hire_trend = data['hire_year'].value_counts().sort_index()
-    sns.lineplot(x=hire_trend.index, y=hire_trend.values, marker="o", ax=ax)
-    ax.set_ylabel("Number of Hires")
-    st.pyplot(fig)
-    st.markdown("*This chart shows how many employees were hired each year.*")
-    download_chart(fig, "hiring_trend.png")
+        else:
+            st.warning("❌ Sorry, I can't answer that question. This data is restricted or unsupported.")
 
-elif tabs == "📊 Salary Gap by Gender & Dept":
-    st.subheader("📊 Gender Salary Gap per Department")
-    fig, ax = plt.subplots(figsize=(10, 6))
-    avg_gender_dept = data.groupby(["dept_name", "gender"])["salary"].mean().reset_index()
-    sns.barplot(data=avg_gender_dept, x="salary", y="dept_name", hue="gender", ax=ax)
-    st.pyplot(fig)
-    st.markdown("*This chart compares gender-based salary gaps per department.*")
-    download_chart(fig, "gender_salary_gap_by_dept.png")
+        # Optional download
+        if 'fig' in locals():
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png")
+            st.download_button("📥 Download Chart", buf.getvalue(), "chart.png", "image/png")
 
-elif tabs == "🎯 Age vs Promotions":
-    st.subheader("🎯 Promotions vs. Age")
-    if "no_of_promotions" in data.columns:
-        fig, ax = plt.subplots()
-        prom_age = data.groupby('age')['no_of_promotions'].mean()
-        sns.lineplot(x=prom_age.index, y=prom_age.values, ax=ax)
-        ax.set_ylabel("Avg. Promotions")
-        st.pyplot(fig)
-        st.markdown("*This chart shows the relationship between age and promotion frequency.*")
-        download_chart(fig, "promotions_by_age.png")
-    else:
-        st.warning("⚠️ Column 'no_of_promotions' not found in dataset.")
-
-elif tabs == "🔥 Attrition Risk":
-    st.subheader("🔥 Average Attrition Risk by Department")
-    if "attrition_risk" in data.columns:
-        fig, ax = plt.subplots()
-        avg_risk = data.groupby("dept_name")["attrition_risk"].mean().sort_values(ascending=False)
-        sns.barplot(x=avg_risk.values, y=avg_risk.index, palette="Reds", ax=ax)
-        ax.set_xlabel("Risk Score")
-        st.pyplot(fig)
-        st.markdown("*This chart shows departments with the highest attrition risk.*")
-        download_chart(fig, "attrition_risk.png")
-    else:
-        st.warning("⚠️ 'attrition_risk' column not found in dataset.")
-
-
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
