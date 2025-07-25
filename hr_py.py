@@ -76,33 +76,58 @@ import streamlit as st
 import pandas as pd
 import joblib
 
-# Load trained model
-model = joblib.load("risk_model.pkl")
-
 # App title
 st.title("🎯 Employee Risk Prediction App")
 st.write("Upload employee data to predict their risk score.")
 
-# Upload CSV file
+# Load model safely
+@st.cache_resource
+def load_model():
+    try:
+        return joblib.load("risk_model.pkl")
+    except FileNotFoundError:
+        st.error("❌ Trained model file (risk_model.pkl) not found.")
+        return None
+
+model = load_model()
+
+# File uploader
 uploaded_file = st.file_uploader("📤 Upload a CSV file", type=["csv"])
 
-if uploaded_file is not None:
-    data = pd.read_csv(uploaded_file)
-    st.write("✅ Uploaded Data Preview:")
-    st.dataframe(data)
-
-    expected_cols = ['gender', 'title', 'dept_name', 'tenure', 'amount', 'num_promotions']
-
-    if all(col in data.columns for col in expected_cols):
-        input_data = data[expected_cols]
-        predictions = model.predict(input_data)
-        data['Predicted Risk'] = predictions
-
-        st.success("✅ Predictions completed!")
+if model is not None and uploaded_file is not None:
+    try:
+        # Read uploaded CSV
+        data = pd.read_csv(uploaded_file)
+        st.write("✅ Uploaded Data Preview:")
         st.dataframe(data)
 
-        # Download button
-        csv = data.to_csv(index=False).encode('utf-8')
-        st.download_button("⬇️ Download Results as CSV", data=csv, file_name="risk_predictions.csv", mime="text/csv")
-    else:
-        st.error("❌ Missing columns. Expected: " + ", ".join(expected_cols))
+        # Expected columns
+        expected_cols = ['gender', 'title', 'dept_name', 'tenure', 'amount', 'num_promotions']
+
+        # Check for missing columns
+        if all(col in data.columns for col in expected_cols):
+            input_data = data[expected_cols]
+
+            # Run prediction
+            predictions = model.predict(input_data)
+            data['Predicted Risk'] = predictions
+
+            st.success("✅ Predictions completed!")
+            st.dataframe(data)
+
+            # Download result
+            csv = data.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="⬇️ Download Results as CSV",
+                data=csv,
+                file_name="risk_predictions.csv",
+                mime="text/csv"
+            )
+        else:
+            missing = [col for col in expected_cols if col not in data.columns]
+            st.error(f"❌ Missing required columns: {', '.join(missing)}")
+
+    except Exception as e:
+        st.error(f"⚠️ Error processing file: {e}")
+elif uploaded_file is None:
+    st.info("📥 Please upload a CSV file to proceed.")
