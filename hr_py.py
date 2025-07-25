@@ -71,4 +71,38 @@ Original file is located at
 #     st.success(f"تقييم المخاطر المتوقع: {prediction}")
 #
 
+import streamlit as st
+import pandas as pd
+import joblib
+
+# Load trained model
+model = joblib.load("risk_model.pkl")
+
+# App title
+st.title("🎯 Employee Risk Prediction App")
+st.write("Upload employee data to predict their risk score.")
+
+# Upload CSV file
+uploaded_file = st.file_uploader("📤 Upload a CSV file", type=["csv"])
+
+if uploaded_file is not None:
+    data = pd.read_csv(uploaded_file)
+    st.write("✅ Uploaded Data Preview:")
+    st.dataframe(data)
+
+    expected_cols = ['gender', 'title', 'dept_name', 'tenure', 'amount', 'num_promotions']
+
+    if all(col in data.columns for col in expected_cols):
+        input_data = data[expected_cols]
+        predictions = model.predict(input_data)
+        data['Predicted Risk'] = predictions
+
+        st.success("✅ Predictions completed!")
+        st.dataframe(data)
+
+        # Download button
+        csv = data.to_csv(index=False).encode('utf-8')
+        st.download_button("⬇️ Download Results as CSV", data=csv, file_name="risk_predictions.csv", mime="text/csv")
+    else:
+        st.error("❌ Missing columns. Expected: " + ", ".join(expected_cols))
 
