@@ -79,12 +79,13 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import io  # تمت إضافة هذه المكتبة المطلوبة لوظيفة fig_to_image
+import io
 
+# تهيئة الصفحة
 st.set_page_config(page_title="HR Insights", layout="wide")
 sns.set_style("whitegrid")
 
-# --- Load Data ---
+# --- تحميل البيانات ---
 @st.cache_data
 def load_data():
     def read_file(name):
@@ -105,7 +106,7 @@ def load_data():
 
 current_emp_snapshot, department_employee, employee, department, salary, title, department_manager = load_data()
 
-# --- Preprocessing ---
+# --- معالجة مسبقة للبيانات ---
 if not salary.empty:
     salary['year'] = pd.to_datetime(salary['from_date']).dt.year
     salary_sorted = salary.sort_values(['employee_id', 'from_date'])
@@ -115,81 +116,99 @@ if not salary.empty:
 else:
     salary_sorted = pd.DataFrame()
 
-# Top salaries by department
+# أفضل الرواتب حسب القسم - مع التحقق من وجود الأعمدة
 if not current_emp_snapshot.empty:
-    top_10 = current_emp_snapshot.groupby("dept_name", as_index=False).apply(
-        lambda x: x.sort_values("salary_amount", ascending=False).head(10)
-    ).reset_index(drop=True)
+    required_columns = ['dept_name', 'salary_amount']
+    if all(col in current_emp_snapshot.columns for col in required_columns):
+        top_10 = current_emp_snapshot.groupby("dept_name", as_index=False).apply(
+            lambda x: x.nlargest(10, "salary_amount")
+        ).reset_index(drop=True)
+    else:
+        st.warning("البيانات لا تحتوي على الأعمدة المطلوبة لعرض أفضل الرواتب")
+        top_10 = pd.DataFrame()
 else:
     top_10 = pd.DataFrame()
 
-# --- Helper function for downloading charts ---
+# --- دالة مساعدة لحفظ المخططات ---
 def fig_to_image(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches='tight')
     buf.seek(0)
     return buf
 
-# --- App Layout ---
-st.title("📊 HR Insights Dashboard")
-st.markdown("Ask a question below and get visual insights from employee data.")
+# --- واجهة التطبيق ---
+st.title("📊 لوحة تحليل الموارد البشرية")
+st.markdown("اطرح سؤالاً للحصول على رؤى مرئية من بيانات الموظفين")
 
-question = st.text_input("❓ Ask a question about employee data")
+# عرض الأعمدة المتاحة لتصحيح الأخطاء
+if not current_emp_snapshot.empty:
+    with st.expander("عرض الأعمدة المتاحة في البيانات"):
+        st.write("أعمدة بيانات الموظفين الحاليين:", current_emp_snapshot.columns.tolist())
 
+question = st.text_input("❓ اطرح سؤالاً عن بيانات الموظفين")
+
+# الأسئلة المدعومة
 allowed_questions = {
-    "top salaries": "Top salaries by department",
-    "highest paid": "Top salaries by department",
-    "salary growth": "Salary growth per year",
-    "average salary per gender": "Average salary per gender",
-    "gender salary": "Average salary per gender",
-    "tenure vs salary": "Tenure vs Salary"
+    "top salaries": "أعلى الرواتب حسب القسم",
+    "highest paid": "أعلى الرواتب حسب القسم",
+    "salary growth": "نمو الرواتب السنوي",
+    "average salary per gender": "متوسط الراتب حسب الجنس",
+    "gender salary": "متوسط الراتب حسب الجنس",
+    "tenure vs salary": "الخبرة مقابل الراتب"
 }
 
-# --- Handle Questions ---
+# --- معالجة الأسئلة ---
 if question:
     q = question.lower()
     matched = [key for key in allowed_questions if key in q]
 
     if matched:
         chart_title = allowed_questions[matched[0]]
-        st.success(f"✅ Showing chart for: {chart_title}")
+        st.success(f"✅ عرض مخطط لـ: {chart_title}")
         fig, ax = plt.subplots(figsize=(10, 5))
 
         if "salary growth" in matched[0]:
-            if not salary_sorted.empty:
+            if not salary_sorted.empty and 'growth_year' in salary_sorted.columns:
                 avg_growth = salary_sorted.groupby("growth_year")["salary_growth"].mean().reset_index()
                 sns.lineplot(data=avg_growth, x="growth_year", y="salary_growth", marker='o', ax=ax)
-                ax.set_title("📈 Average Salary Growth per Year")
+                ax.set_title("📈 متوسط نمو الرواتب السنوي")
                 st.pyplot(fig)
-                st.caption("This shows how employee salary has increased year over year.")
-                st.download_button("⬇️ Download Chart", data=fig_to_image(fig), file_name="salary_growth.png", mime="image/png")
+                st.download_button("⬇️ تحميل المخطط", data=fig_to_image(fig), file_name="salary_growth.png", mime="image/png")
+            else:
+                st.error("بيانات نمو الرواتب غير متوفرة أو غير مكتملة")
 
         elif "top salaries" in matched[0] or "highest paid" in matched[0]:
-            if not top_10.empty:
-                top10_plot = top_10.drop_duplicates(subset=["dept_name"]).sort_values("salary_amount", ascending=False)
+            if not top_10.empty and all(col in top_10.columns for col in ['dept_name', 'salary_amount']):
+                top10_plot = top_10.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
                 sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax)
-                ax.set_title("🏆 Highest Paid Employees by Department")
+                ax.set_title("🏆 أعلى الموظفين راتباً حسب القسم")
                 plt.xticks(rotation=45)
                 st.pyplot(fig)
-                st.caption("Shows top salary holders in each department.")
-                st.download_button("⬇️ Download Chart", data=fig_to_image(fig), file_name="top_salaries.png", mime="image/png")
+                st.download_button("⬇️ تحميل المخطط", data=fig_to_image(fig), file_name="top_salaries.png", mime="image/png")
+            else:
+                st.error("بيانات أعلى الرواتب غير متوفرة أو غير مكتملة")
 
         elif "gender salary" in matched[0] or "average salary per gender" in matched[0]:
-            if not current_emp_snapshot.empty:
+            if not current_emp_snapshot.empty and all(col in current_emp_snapshot.columns for col in ['gender', 'salary_amount']):
                 sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
-                ax.set_title("⚖️ Average Salary by Gender")
+                ax.set_title("⚖️ متوسط الراتب حسب الجنس")
                 st.pyplot(fig)
-                st.caption("Displays the average salary comparison between genders.")
-                st.download_button("⬇️ Download Chart", data=fig_to_image(fig), file_name="gender_salary.png", mime="image/png")
+                st.download_button("⬇️ تحميل المخطط", data=fig_to_image(fig), file_name="gender_salary.png", mime="image/png")
+            else:
+                st.error("بيانات الرواتب حسب الجنس غير متوفرة أو غير مكتملة")
 
         elif "tenure vs salary" in matched[0]:
-            if not current_emp_snapshot.empty:
-                current_emp_snapshot = current_emp_snapshot.dropna(subset=["tenure", "salary_amount"])
-                sns.scatterplot(data=current_emp_snapshot, x="tenure", y="salary_amount", ax=ax)
-                ax.set_title("📉 Tenure vs Salary")
+            if not current_emp_snapshot.empty and all(col in current_emp_snapshot.columns for col in ['tenure', 'salary_amount']):
+                current_emp_snapshot_clean = current_emp_snapshot.dropna(subset=["tenure", "salary_amount"])
+                sns.scatterplot(data=current_emp_snapshot_clean, x="tenure", y="salary_amount", ax=ax)
+                ax.set_title("📉 العلاقة بين الخبرة والراتب")
                 st.pyplot(fig)
-                st.caption("Examines how employee tenure relates to salary level.")
-                st.download_button("⬇️ Download Chart", data=fig_to_image(fig), file_name="tenure_vs_salary.png", mime="image/png")
+                st.download_button("⬇️ تحميل المخطط", data=fig_to_image(fig), file_name="tenure_vs_salary.png", mime="image/png")
+            else:
+                st.error("بيانات الخبرة والرواتب غير متوفرة أو غير مكتملة")
 
     else:
-        st.warning("🚫 This data is restricted or question is unsupported.")
+        st.warning("⚠️ هذا السؤال غير مدعوم أو البيانات المطلوبة غير متاحة")
+        st.write("الأسئلة المدعومة:")
+        for q, desc in allowed_questions.items():
+            st.write(f"- {q}: {desc}")
