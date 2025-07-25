@@ -70,39 +70,86 @@ Original file is located at
 #     prediction = model.predict(input_data)[0]
 #     st.success(f"تقييم المخاطر المتوقع: {prediction}")
 #
-
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime
 import joblib
 
-# Load trained model
-model = joblib.load("risk_model.pkl")
+st.set_page_config(page_title="Employee Risk & Insights App", layout="wide")
+st.title("💼 HR Insights and Risk Prediction")
 
-# App title
-st.title("🎯 Employee Risk Prediction App")
-st.write("Upload employee data to predict their risk score.")
+# Load model
+@st.cache_resource
+def load_model():
+    return joblib.load("risk_model.pkl")
 
-# Upload CSV file
-uploaded_file = st.file_uploader("📤 Upload a CSV file", type=["csv"])
+# Load data
+@st.cache_data
+def load_data():
+    current_emp_snapchat = pd.read_csv("current_employee_snapshot.csv")
+    department_employee = pd.read_csv("department_employee.csv")
+    employee = pd.read_csv("employee.csv")
+    department = pd.read_csv("department.csv")
+    salary = pd.read_csv("salary.csv")
+    title = pd.read_csv("title.csv")
+    department_manager = pd.read_csv("department_manager.csv")
+    return current_emp_snapchat, department_employee, employee, department, salary, title, department_manager
 
-if uploaded_file is not None:
+model = load_model()
+current_emp_snapchat, department_employee, employee, department, salary, title, department_manager = load_data()
+
+# --- Risk Prediction Section ---
+st.header("🎯 Upload Employee Data to Predict Risk")
+uploaded_file = st.file_uploader("📤 Upload a CSV file", type=["csv"], key="risk")
+
+if uploaded_file:
     data = pd.read_csv(uploaded_file)
-    st.write("✅ Uploaded Data Preview:")
-    st.dataframe(data)
-
     expected_cols = ['gender', 'title', 'dept_name', 'tenure', 'amount', 'num_promotions']
-
     if all(col in data.columns for col in expected_cols):
         input_data = data[expected_cols]
-        predictions = model.predict(input_data)
-        data['Predicted Risk'] = predictions
-
-        st.success("✅ Predictions completed!")
+        preds = model.predict(input_data)
+        data['Predicted Risk'] = preds
+        st.success("✅ Predictions Done!")
         st.dataframe(data)
-
-        # Download button
         csv = data.to_csv(index=False).encode('utf-8')
-        st.download_button("⬇️ Download Results as CSV", data=csv, file_name="risk_predictions.csv", mime="text/csv")
+        st.download_button("⬇️ Download Results as CSV", data=csv, file_name="risk_predictions.csv")
     else:
-        st.error("❌ Missing columns. Expected: " + ", ".join(expected_cols))
+        st.error("❌ CSV must include columns: " + ", ".join(expected_cols))
 
+# --- Insights Section ---
+st.header("💬 Ask a Question About HR Data")
+question = st.text_input("Type your question below:")
+
+# Add your logic here to respond to questions like in your previous script
+# Example:
+if question:
+    q = question.lower()
+    if "top salaries" in q:
+        st.write("📌 Top 10 Highest Paid Employees Coming Soon...")
+    else:
+        st.warning("⚠️ Question not recognized. Try rephrasing.")
+
+# --- Optional: Employee Salary Trend ---
+st.header("📈 Check Employee Salary Trend")
+emp_id_input = st.text_input("Enter Employee ID:", key="salary")
+
+if emp_id_input:
+    try:
+        emp_id = int(emp_id_input)
+        salary['from_date'] = pd.to_datetime(salary['from_date'])
+        emp_data = salary[salary['employee_id'] == emp_id]
+        if not emp_data.empty:
+            st.dataframe(emp_data)
+            fig, ax = plt.subplots()
+            ax.plot(emp_data['from_date'], emp_data['amount'], marker='o')
+            ax.set_title(f"Salary Over Time for Employee {emp_id}")
+            ax.set_xlabel("Date")
+            ax.set_ylabel("Salary")
+            ax.grid(True)
+            st.pyplot(fig)
+        else:
+            st.warning("No salary data found for this employee.")
+    except ValueError:
+        st.warning("Please enter a valid numeric ID.")
