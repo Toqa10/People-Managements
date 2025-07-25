@@ -72,6 +72,7 @@ Original file is located at
 #
 # --- Streamlit HR Analytics App ---
 # --- Streamlit HR Analytics App ---
+# --- Streamlit HR Analytics App ---
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -101,7 +102,7 @@ def load_data():
         department = pd.DataFrame()
 
     try:
-        salary = pd.read_csv("salary_sample.csv")
+        salary = pd.read_csv("salary.csv")
     except FileNotFoundError:
         salary = pd.DataFrame()
 
@@ -161,7 +162,40 @@ if question:
     q = question.lower()
 
     if any(key in q for key in allowed_questions):
-        st.text_input("You asked:", question)
-        st.success("✅ Valid question. Check main screen for visual.")
+        st.success(f"✅ Showing chart for: {question}")
+
+        # Auto chart rendering
+        if "salary growth" in q:
+            if not salary_sorted.empty:
+                fig, ax = plt.subplots(figsize=(10, 4))
+                sns.lineplot(data=salary_sorted, x="growth_year", y="salary_growth", ax=ax)
+                ax.set_title("Average Salary Growth per Year")
+                st.pyplot(fig)
+
+        elif "top salaries" in q or "highest paid" in q:
+            if not top_10.empty:
+                fig, ax = plt.subplots(figsize=(12, 5))
+                top10_plot = top_10.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
+                sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax)
+                ax.set_title("Top Salaries by Department")
+                plt.xticks(rotation=45)
+                st.pyplot(fig)
+
+        elif "average salary per gender" in q or "gender salary" in q:
+            if not current_emp_snapshot.empty:
+                fig, ax = plt.subplots()
+                sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
+                ax.set_title("Average Salary per Gender")
+                st.pyplot(fig)
+
+        elif "tenure vs salary" in q:
+            if not current_emp_snapshot.empty:
+                fig, ax = plt.subplots()
+                sns.scatterplot(data=current_emp_snapshot, x="tenure", y="salary_amount", ax=ax)
+                ax.set_title("Tenure vs Salary")
+                st.pyplot(fig)
+
+        # Add more elif blocks here for other supported questions if needed
+
     else:
         st.warning("⚠️ This question is not supported. Please rephrase or ask a different question.")
