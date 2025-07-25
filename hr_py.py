@@ -79,6 +79,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import io  # تمت إضافة هذه المكتبة المطلوبة لوظيفة fig_to_image
 
 st.set_page_config(page_title="HR Insights", layout="wide")
 sns.set_style("whitegrid")
@@ -121,6 +122,13 @@ if not current_emp_snapshot.empty:
     ).reset_index(drop=True)
 else:
     top_10 = pd.DataFrame()
+
+# --- Helper function for downloading charts ---
+def fig_to_image(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches='tight')
+    buf.seek(0)
+    return buf
 
 # --- App Layout ---
 st.title("📊 HR Insights Dashboard")
@@ -166,7 +174,7 @@ if question:
                 st.caption("Shows top salary holders in each department.")
                 st.download_button("⬇️ Download Chart", data=fig_to_image(fig), file_name="top_salaries.png", mime="image/png")
 
-        elif "gender salary" in matched[0]:
+        elif "gender salary" in matched[0] or "average salary per gender" in matched[0]:
             if not current_emp_snapshot.empty:
                 sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
                 ax.set_title("⚖️ Average Salary by Gender")
@@ -185,11 +193,3 @@ if question:
 
     else:
         st.warning("🚫 This data is restricted or question is unsupported.")
-
-# --- Helper function for downloading charts ---
-import io
-def fig_to_image(fig):
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches='tight')
-    buf.seek(0)
-    return buf
