@@ -10,157 +10,163 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from io import BytesIO
+import io
+from datetime import datetime
 
-# إعداد التصميم
+# -------------- إعداد الواجهة العامة ---------------- #
+st.set_page_config(page_title="📊 HR Analytics Dashboard", layout="wide")
 sns.set_style("whitegrid")
-plt.rcParams["axes.titlesize"] = 16
-plt.rcParams["axes.labelsize"] = 13
 
-# تحميل البيانات
+# ---------------- تحميل البيانات ---------------- #
 @st.cache_data
-def load_data():
-    employee_df = pd.read_csv("employee.csv")
-    department_df = pd.read_csv("department.csv")
-    salary_df = pd.read_csv("salary.csv")
-    title_df = pd.read_csv("title.csv")
-    return employee_df, department_df, salary_df, title_df
+def load_csv(file):
+    try:
+        df = pd.read_csv(file)
+        df.columns = df.columns.str.lower().str.replace(' ', '_')
+        return df
+    except:
+        return pd.DataFrame()
 
-employee_df, department_df, salary_df, title_df = load_data()
+salary = load_csv("salary.csv")  # ❗ يجب أن يكون الملف باسم salary.csv
+employee = load_csv("employee.csv")
+department = load_csv("department.csv")
+dept_emp = load_csv("department_employee.csv")
+title = load_csv("title.csv")
 
-# دمج البيانات
-employee_df = employee_df.merge(department_df, on='dept_id', how='left')
-employee_df = employee_df.merge(title_df, on='emp_id', how='left')
-employee_df['hire_date'] = pd.to_datetime(employee_df['hire_date'])
-employee_df['tenure_years'] = (pd.to_datetime("today") - employee_df['hire_date']).dt.days / 365
+# -------------- معالجة البيانات ---------------- #
+def preprocess(employee, salary, dept_emp, department, title):
+    df = employee.copy()
+    salary_latest = salary.copy()
 
-salary_df['from_date'] = pd.to_datetime(salary_df['from_date'])
-salary_df['to_date'] = pd.to_datetime(salary_df['to_date'])
-latest_salary_df = salary_df.sort_values('to_date').drop_duplicates('emp_id', keep='last')
-employee_df = employee_df.merge(latest_salary_df[['emp_id', 'salary', 'from_date', 'to_date']], on='emp_id', how='left')
-employee_df.rename(columns={'salary': 'salary_amount'}, inplace=True)
+    # حساب العمر
+    df['birth_date'] = pd.to_datetime(df['birth_date'], errors='coerce')
+    df['age'] = ((pd.Timestamp.today() - df['birth_date']).dt.days // 365)
 
-# الرسم مع خاصية التحميل
-def show_chart_with_download(fig, filename, explanation):
+    # حساب عدد سنوات العمل
+    df['hire_date'] = pd.to_datetime(df['hire_date'], errors='coerce')
+    df['tenure_years'] = ((pd.Timestamp.today() - df['hire_date']).dt.days // 365)
+
+    # آخر مرتب
+    salary_latest['to_date'] = pd.to_datetime(salary_latest['to_date'], errors='coerce')
+    latest_salary = salary_latest.sort_values('to_date').drop_duplicates('employee_id', keep='last')
+    df = df.merge(latest_salary[['employee_id', 'amount']], left_on='id', right_on='employee_id', how='left')
+    df.rename(columns={'amount': 'salary_amount'}, inplace=True)
+
+    # آخر إدارة
+    dept_emp['from_date'] = pd.to_datetime(dept_emp['from_date'], errors='coerce')
+    last_dept = dept_emp.sort_values('from_date').drop_duplicates('employee_id', keep='last')
+    last_dept = last_dept.merge(department[['id', 'dept_name']], left_on='department_id', right_on='id', how='left')
+    df = df.merge(last_dept[['employee_id', 'dept_name']], left_on='id', right_on='employee_id', how='left')
+
+    # الترقية وعدد المناصب
+    title['from_date'] = pd.to_datetime(title['from_date'], errors='coerce')
+    promotions = title.groupby('employee_id')['title'].nunique().reset_index()
+    promotions.columns = ['employee_id', 'num_promotions']
+    df = df.merge(promotions, left_on='id', right_on='employee_id', how='left')
+
+    return df
+
+hr_data = preprocess(employee, salary, dept_emp, department, title)
+
+# ----------- دالة حفظ الرسوم كصورة ------------ #
+def save_fig_as_image(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+    return buf
+
+# ----------- رسم المخططات ---------------- #
+def plot_avg_salary_by_gender(df):
+    fig, ax = plt.subplots()
+    sns.barplot(data=df, x='gender', y='salary_amount', estimator='mean', palette='coolwarm', ax=ax)
+    ax.set_title("👫 Average Salary by Gender")
     st.pyplot(fig)
-    st.markdown(f"📌 {explanation}")
-    buffer = BytesIO()
-    fig.savefig(buffer, format="png")
-    st.download_button("⬇️ Download Chart", data=buffer.getvalue(), file_name=filename, mime="image/png")
+    st.caption("This chart shows how average salary differs between genders.")
+    st.download_button("📥 Download", save_fig_as_image(fig), "avg_salary_gender.png", "image/png")
 
-# الرسوم البيانية
-def plot_gender_distribution_by_job(df):
+def plot_tenure_by_dept(df):
+    avg_tenure = df.groupby('dept_name')['tenure_years'].mean().sort_values()
     fig, ax = plt.subplots(figsize=(10, 6))
-    sns.countplot(data=df, x='title', hue='gender', ax=ax)
-    ax.set_title("Gender Distribution by Job Title")
-    plt.xticks(rotation=45)
-    show_chart_with_download(fig, "gender_job_dist.png", "This chart shows gender distribution across job titles.")
+    avg_tenure.plot(kind='barh', color='teal', ax=ax)
+    ax.set_title("🕒 Average Tenure by Department")
+    ax.set_xlabel("Years")
+    st.pyplot(fig)
+    st.caption("This chart shows average tenure in each department — a proxy for turnover.")
+    st.download_button("📥 Download", save_fig_as_image(fig), "tenure_by_department.png", "image/png")
 
-def plot_average_tenure_per_department(df):
-    avg_tenure = df.groupby('dept_name')['tenure_years'].mean().sort_values(ascending=False)
-    fig, ax = plt.subplots(figsize=(10, 6))
-    avg_tenure.plot(kind='bar', ax=ax)
-    ax.set_ylabel("Average Tenure (Years)")
-    ax.set_title("Average Tenure per Department")
-    show_chart_with_download(fig, "avg_tenure.png", "Shows how long employees stay in each department on average.")
-
-def plot_total_salary_by_department(df):
-    total_salary = df.groupby('dept_name')['salary_amount'].sum().sort_values(ascending=False)
-    fig, ax = plt.subplots(figsize=(10, 6))
-    total_salary.plot(kind='bar', ax=ax)
-    ax.set_ylabel("Total Salary Paid")
-    ax.set_title("Total Salary by Department")
-    show_chart_with_download(fig, "total_salary.png", "Shows which departments have the highest total salary payouts.")
-
-def plot_high_turnover_departments(df):
-    turnover_counts = df['dept_name'].value_counts().sort_values()
-    fig, ax = plt.subplots(figsize=(10, 6))
-    turnover_counts.plot(kind='barh', ax=ax)
-    ax.set_title("Employee Count by Department (Turnover Risk)")
-    show_chart_with_download(fig, "turnover_dept.png", "Low employee count may indicate high turnover risk.")
-
-def plot_top_salaries_by_department(df):
-    top_salaries = df.groupby('dept_name')['salary_amount'].max().sort_values(ascending=False)
-    fig, ax = plt.subplots(figsize=(10, 6))
-    top_salaries.plot(kind='bar', ax=ax)
-    ax.set_ylabel("Top Salary")
-    ax.set_title("Top Salary by Department")
-    show_chart_with_download(fig, "top_salary.png", "Shows the maximum salary paid in each department.")
-
-def plot_salary_gap_by_gender_per_department(df):
-    gap_df = df.groupby(['dept_name', 'gender'])['salary_amount'].mean().unstack()
-    fig, ax = plt.subplots(figsize=(10, 6))
-    gap_df.plot(kind='bar', ax=ax)
+def plot_salary_gap_by_dept_gender(df):
+    df = df.dropna(subset=['dept_name', 'gender', 'salary_amount'])
+    gap = df.groupby(['dept_name', 'gender'])['salary_amount'].mean().unstack()
+    fig, ax = plt.subplots(figsize=(12, 6))
+    gap.plot(kind='bar', ax=ax, colormap='Accent')
+    ax.set_title("💸 Salary Gap by Gender per Department")
     ax.set_ylabel("Average Salary")
-    ax.set_title("Salary Gap by Gender per Department")
-    show_chart_with_download(fig, "salary_gap.png", "Displays average salary differences between genders.")
+    st.pyplot(fig)
+    st.caption("This chart compares average salaries by gender in each department.")
+    st.download_button("📥 Download", save_fig_as_image(fig), "salary_gap_by_dept_gender.png", "image/png")
 
-def plot_annual_salary_growth(salary_df):
-    salary_df['year'] = salary_df['from_date'].dt.year
-    growth = salary_df.groupby('year')['salary'].mean()
-    fig, ax = plt.subplots(figsize=(10, 6))
-    growth.plot(marker='o', ax=ax)
-    ax.set_ylabel("Average Salary")
-    ax.set_title("Annual Salary Growth")
-    show_chart_with_download(fig, "salary_growth.png", "Tracks average salary changes over the years.")
+# ---------------- واجهة المستخدم ---------------- #
+st.markdown("<h1 style='text-align:center;'>📊 HR Analytics Dashboard</h1>", unsafe_allow_html=True)
+st.markdown("<h4 style='text-align:center; color:gray;'>Explore insights about salaries, tenure, and workforce structure</h4>", unsafe_allow_html=True)
 
-# ----------------- واجهة المستخدم ------------------
+# قائمة الخيارات
+menu = ["📌 Overview", "👫 Salary by Gender", "🕒 Tenure by Department", "💸 Salary Gap by Gender", "📂 Raw Data"]
+choice = st.sidebar.radio("Select Analysis:", menu)
 
-st.image("https://cdn-icons-png.flaticon.com/512/2950/2950731.png", width=80)
-st.title("📊 Advanced HR Analytics Dashboard")
-st.markdown("""
-Welcome to the **HR Insights Dashboard** – your central hub for analyzing employee performance, salary trends, turnover risks, and more.
+# عرض حسب الاختيار
+if choice == "📌 Overview":
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Employees", f"{hr_data['id'].nunique():,}")
+    with col2:
+        st.metric("Average Age", f"{hr_data['age'].mean():.1f} years")
+    with col3:
+        st.metric("Avg. Tenure", f"{hr_data['tenure_years'].mean():.1f} years")
+    st.markdown("### 👀 Quick Charts")
+    plot_avg_salary_by_gender(hr_data)
+    plot_tenure_by_dept(hr_data)
 
-Explore data-driven insights to help HR teams make smarter decisions.
-""")
+elif choice == "👫 Salary by Gender":
+    st.header("👫 Average Salary by Gender")
+    plot_avg_salary_by_gender(hr_data)
 
-# الشريط الجانبي
-st.sidebar.title("🧭 Navigation")
-analysis_options = [
-    "Gender Analysis",
-    "Tenure Analysis",
-    "Salary Analysis",
-    "Turnover Risk",
-    "Unsupported Questions"
-]
-selected_analysis = st.sidebar.radio("📌 Select Analysis Section:", analysis_options)
+elif choice == "🕒 Tenure by Department":
+    st.header("🕒 Average Tenure by Department")
+    plot_tenure_by_dept(hr_data)
 
+elif choice == "💸 Salary Gap by Gender":
+    st.header("💸 Salary Gap by Gender per Department")
+    plot_salary_gap_by_dept_gender(hr_data)
+
+elif choice == "📂 Raw Data":
+    st.header("📂 View Raw Data")
+    selected = st.selectbox("Choose table to display:", ["employee", "salary", "department", "title", "department_employee"])
+    if selected == "employee":
+        st.dataframe(employee)
+    elif selected == "salary":
+        st.dataframe(salary)
+    elif selected == "department":
+        st.dataframe(department)
+    elif selected == "title":
+        st.dataframe(title)
+    elif selected == "department_employee":
+        st.dataframe(dept_emp)
+
+# ---------------- الرد على الأسئلة ---------------- #
 st.sidebar.markdown("---")
-st.sidebar.markdown("💡 **Ask a Question**")
-question = st.sidebar.text_input("What do you want to know?")
+st.sidebar.subheader("🔍 Ask a Question")
+q = st.sidebar.text_input("e.g., show average salary by gender")
 
-# ---------- التحليل حسب الاختيار ----------
-
-if selected_analysis == "Gender Analysis":
-    st.header("👩‍💼 Gender Analysis")
-    plot_gender_distribution_by_job(employee_df)
-    plot_salary_gap_by_gender_per_department(employee_df)
-
-elif selected_analysis == "Tenure Analysis":
-    st.header("🕒 Tenure Analysis")
-    plot_average_tenure_per_department(employee_df)
-
-elif selected_analysis == "Salary Analysis":
-    st.header("💸 Salary Analysis")
-    tab1, tab2, tab3 = st.tabs(["Total Salary", "Top Salaries", "Growth Over Time"])
-    with tab1:
-        plot_total_salary_by_department(employee_df)
-    with tab2:
-        plot_top_salaries_by_department(employee_df)
-    with tab3:
-        plot_annual_salary_growth(salary_df)
-
-elif selected_analysis == "Turnover Risk":
-    st.header("🔁 Turnover Risk")
-    plot_high_turnover_departments(employee_df)
-
-elif selected_analysis == "Unsupported Questions":
-    st.header("❓ Unsupported Questions")
-    if question:
-        st.error("🚫 Sorry, this data is restricted or unsupported at the moment.")
+if q:
+    q = q.lower()
+    if "salary" in q and "gender" in q:
+        st.subheader("👫 Chart: Average Salary by Gender")
+        plot_avg_salary_by_gender(hr_data)
+    elif "tenure" in q and "department" in q:
+        st.subheader("🕒 Chart: Tenure by Department")
+        plot_tenure_by_dept(hr_data)
+    elif "salary gap" in q or ("gender" in q and "department" in q):
+        st.subheader("💸 Chart: Salary Gap by Gender per Department")
+        plot_salary_gap_by_dept_gender(hr_data)
     else:
-        st.info("Please type your question in the sidebar.")
-
-# Footer
-st.markdown("---")
-st.markdown("<center style='font-size:13px'>📊 Built with ❤️ using Streamlit | 2025 © Your Company</center>", unsafe_allow_html=True)
+        st.warning("❗ This data is restricted or unsupported in current dashboard.")
