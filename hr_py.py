@@ -10,620 +10,157 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import io
-from datetime import datetime
+from io import BytesIO
 
-# Set page configuration for wide layout
-st.set_page_config(page_title="Advanced HR Analytics Dashboard", layout="wide", icon="📊")
-sns.set_style("whitegrid") # Set a pleasant seaborn style
+# إعداد التصميم
+sns.set_style("whitegrid")
+plt.rcParams["axes.titlesize"] = 16
+plt.rcParams["axes.labelsize"] = 13
 
-# --- Load Raw Data ---
+# تحميل البيانات
 @st.cache_data
-def load_raw_data():
-    """Loads all raw CSV files into DataFrames."""
-    file_names = {
-        "current_employee_snapshot": "current_employee_snapshot.csv",
-        "department_employee": "department_employee.csv",
-        "employee": "employee.csv",
-        "department": "department.csv",
-        "salary": "salary.csv",
-        "title": "title.csv",
-        "department_manager": "department_manager.csv",
-    }
-    
-    loaded_data = {}
-    for key, filename in file_names.items():
-        try:
-            df = pd.read_csv(filename)
-            df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
-            loaded_data[key] = df
-        except FileNotFoundError:
-            st.error(f"Error: File not found: {filename}. Please ensure all CSV files are in the same directory.")
-            loaded_data[key] = pd.DataFrame() # Return empty DataFrame on error
-        except Exception as e:
-            st.warning(f"Warning: Error loading {filename}: {str(e)}")
-            loaded_data[key] = pd.DataFrame()
+def load_data():
+    employee_df = pd.read_csv("employee.csv")
+    department_df = pd.read_csv("department.csv")
+    salary_df = pd.read_csv("salary.csv")
+    title_df = pd.read_csv("title.csv")
+    return employee_df, department_df, salary_df, title_df
 
-    return loaded_data
+employee_df, department_df, salary_df, title_df = load_data()
 
-# Load raw data globally (cached)
-raw_data = load_raw_data()
-current_emp_raw = raw_data.get("current_employee_snapshot", pd.DataFrame())
-dept_emp_raw = raw_data.get("department_employee", pd.DataFrame())
-employee_raw = raw_data.get("employee", pd.DataFrame())
-department_raw = raw_data.get("department", pd.DataFrame())
-salary_raw = raw_data.get("salary", pd.DataFrame())
-title_raw = raw_data.get("title", pd.DataFrame())
-dept_manager_raw = raw_data.get("department_manager", pd.DataFrame())
+# دمج البيانات
+employee_df = employee_df.merge(department_df, on='dept_id', how='left')
+employee_df = employee_df.merge(title_df, on='emp_id', how='left')
+employee_df['hire_date'] = pd.to_datetime(employee_df['hire_date'])
+employee_df['tenure_years'] = (pd.to_datetime("today") - employee_df['hire_date']).dt.days / 365
 
+salary_df['from_date'] = pd.to_datetime(salary_df['from_date'])
+salary_df['to_date'] = pd.to_datetime(salary_df['to_date'])
+latest_salary_df = salary_df.sort_values('to_date').drop_duplicates('emp_id', keep='last')
+employee_df = employee_df.merge(latest_salary_df[['emp_id', 'salary', 'from_date', 'to_date']], on='emp_id', how='left')
+employee_df.rename(columns={'salary': 'salary_amount'}, inplace=True)
 
-# --- Data Preprocessing ---
-@st.cache_data
-def preprocess_data(current_emp_df, employee_df, salary_df, dept_emp_df, department_df, title_df):
-    """
-    Performs all necessary data cleaning, merging, and feature engineering.
-    Returns processed DataFrames for analysis.
-    """
-    st.info("Starting data preprocessing. This may take a moment...")
-
-    # --- 1. Process Salary Data for Growth and Latest Salary ---
-    salary_processed = pd.DataFrame()
-    latest_salaries = pd.DataFrame()
-    if not salary_df.empty and all(col in salary_df.columns for col in ['from_date', 'employee_id', 'amount', 'to_date']):
-        try:
-            salary_df_temp = salary_df.copy()
-            salary_df_temp['from_date'] = pd.to_datetime(salary_df_temp['from_date'], errors='coerce')
-            salary_df_temp['to_date'] = salary_df_temp['to_date'].replace("9999-01-01", "2200-01-01") # Future date for current
-            salary_df_temp['to_date'] = pd.to_datetime(salary_df_temp['to_date'], errors='coerce')
-            
-            salary_df_temp.dropna(subset=['from_date', 'to_date', 'amount'], inplace=True)
-
-            if not salary_df_temp.empty:
-                # Calculate salary growth
-                salary_df_temp = salary_df_temp.sort_values(['employee_id', 'from_date'])
-                salary_df_temp['prev_salary'] = salary_df_temp.groupby('employee_id')['amount'].shift(1)
-                salary_df_temp['salary_growth'] = salary_df_temp['amount'] - salary_df_temp['prev_salary']
-                salary_df_temp['growth_year'] = salary_df_temp['from_date'].dt.year
-                salary_processed = salary_df_temp.copy()
-
-                # Get the latest salary for each employee
-                latest_salaries = salary_df_temp.sort_values(['employee_id', 'to_date'], ascending=[True, True]).drop_duplicates('employee_id', keep='last')
-                latest_salaries = latest_salaries[['employee_id', 'amount']].copy()
-                latest_salaries.rename(columns={'amount': 'salary_amount'}, inplace=True)
-        except Exception as e:
-            st.error(f"Error during salary data processing: {e}")
-            salary_processed = pd.DataFrame()
-            latest_salaries = pd.DataFrame()
-    else:
-        st.warning("Salary raw data is empty or missing expected columns for full processing.")
-
-
-    # --- 2. Enrich Employee Data (central DataFrame for many analyses) ---
-    # Start with all employees to capture tenure, promotions, etc.
-    employee_enriched_df = employee_df.copy()
-
-    # Calculate age and hiring year
-    if 'birth_date' in employee_enriched_df.columns:
-        employee_enriched_df['birth_date'] = pd.to_datetime(employee_enriched_df['birth_date'], errors='coerce')
-        employee_enriched_df['age'] = (pd.Timestamp(datetime.today()) - employee_enriched_df['birth_date']).dt.days / 365.25
-    if 'hire_date' in employee_enriched_df.columns:
-        employee_enriched_df['hire_date'] = pd.to_datetime(employee_enriched_df['hire_date'], errors='coerce')
-        employee_enriched_df['hire_year'] = employee_enriched_df['hire_date'].dt.year
-
-    # Merge latest salary amount
-    if not latest_salaries.empty:
-        employee_enriched_df = pd.merge(employee_enriched_df, latest_salaries,
-                                        left_on='id', right_on='employee_id', how='left')
-        employee_enriched_df.drop(columns=['employee_id'], errors='ignore', inplace=True)
-    else:
-        st.warning("Latest salary data is empty. 'salary_amount' will be missing for employee analyses.")
-
-    # Get latest department assignment for each employee
-    if (not dept_emp_df.empty and not department_df.empty and 
-        all(col in dept_emp_df.columns for col in ['employee_id', 'department_id', 'from_date']) and
-        all(col in department_df.columns for col in ['id', 'dept_name'])):
-        
-        dept_emp_df_temp = dept_emp_df.copy()
-        dept_emp_df_temp['from_date'] = pd.to_datetime(dept_emp_df_temp['from_date'], errors='coerce')
-        dept_emp_df_temp['to_date'] = dept_emp_df_temp['to_date'].replace("9999-01-01", "2200-01-01")
-        dept_emp_df_temp['to_date'] = pd.to_datetime(dept_emp_df_temp['to_date'], errors='coerce')
-        dept_emp_df_temp.dropna(subset=['from_date'], inplace=True)
-
-        if not dept_emp_df_temp.empty:
-            latest_dept_assignments = dept_emp_df_temp.sort_values(['employee_id', 'from_date'], ascending=[True, True]).drop_duplicates('employee_id', keep='last')
-            employee_enriched_df = pd.merge(employee_enriched_df, latest_dept_assignments[['employee_id', 'department_id']],
-                                            left_on='id', right_on='employee_id', how='left')
-            employee_enriched_df = pd.merge(employee_enriched_df, department_df[['id', 'dept_name']],
-                                            left_on='department_id', right_on='id', how='left', suffixes=('', '_dept'))
-            employee_enriched_df.drop(columns=['employee_id', 'id_dept'], errors='ignore', inplace=True)
-        else:
-            st.warning("Department employee data became empty after date parsing/NA drop. Department names may be missing.")
-    else:
-        st.warning("Department employee raw data or Department raw data is empty/missing key columns. Department names will be missing.")
-
-    # Calculate number of promotions (based on unique titles)
-    if not title_df.empty and all(col in title_df.columns for col in ['employee_id', 'title', 'from_date', 'to_date']):
-        title_df_temp = title_df.copy()
-        title_df_temp['from_date'] = pd.to_datetime(title_df_temp['from_date'], errors='coerce')
-        title_df_temp['to_date'] = title_df_temp['to_date'].replace("9999-01-01", "2200-01-01")
-        title_df_temp['to_date'] = pd.to_datetime(title_df_temp['to_date'], errors='coerce')
-        title_df_temp.dropna(subset=['from_date', 'to_date', 'title'], inplace=True)
-
-        if not title_df_temp.empty:
-            promotion_count = title_df_temp.groupby('employee_id').agg(
-                num_titles=('title', 'nunique'),
-                latest_title=('title', lambda x: x.iloc[-1] if not x.empty else None) # Get latest title
-            ).reset_index()
-            promotion_count['num_promotions'] = promotion_count['num_titles'] - 1 # Promotions = (unique titles - 1)
-            
-            employee_enriched_df = pd.merge(employee_enriched_df, promotion_count,
-                                            left_on='id', right_on='employee_id', how='left')
-            employee_enriched_df.drop(columns=['employee_id'], errors='ignore', inplace=True)
-        else:
-            st.warning("Title data became empty after date parsing/NA drop. Promotion counts may be missing.")
-    else:
-        st.warning("Title raw data is empty or missing key columns. Promotion counts and latest titles will be missing.")
-
-
-    # Calculate tenure from hire_date for overall employee data
-    if 'hire_date' in employee_enriched_df.columns:
-        employee_enriched_df['tenure_years'] = (pd.Timestamp(datetime.today()) - employee_enriched_df['hire_date']).dt.days // 365
-    else:
-        st.warning("Hire date not found. Tenure calculation skipped.")
-
-    # Calculate attrition risk score (simplified for demo)
-    # Risk Score: High risk for short tenure (<2 years), low salary, no promotions
-    employee_enriched_df['risk_score'] = 0
-    if 'tenure_years' in employee_enriched_df.columns:
-        employee_enriched_df.loc[employee_enriched_df['tenure_years'] < 2, 'risk_score'] += 1
-    if 'salary_amount' in employee_enriched_df.columns and not employee_enriched_df['salary_amount'].isnull().all():
-        employee_enriched_df.loc[employee_enriched_df['salary_amount'] < employee_enriched_df['salary_amount'].median(skipna=True), 'risk_score'] += 1
-    if 'num_promotions' in employee_enriched_df.columns:
-        employee_enriched_df.loc[employee_enriched_df['num_promotions'].fillna(0) == 0, 'risk_score'] += 1
-
-    st.success("Data preprocessing completed.")
-    return salary_processed, employee_enriched_df # Renamed current_emp_enriched_df to employee_enriched_df for broader scope
-
-# Preprocess data globally (cached)
-salary_processed_df, employee_enriched_df = preprocess_data(
-    current_emp_raw, employee_raw, salary_raw, dept_emp_raw, department_raw, title_raw
-)
-
-# --- Helper function to save plots ---
-def fig_to_image(fig):
-    """Converts a matplotlib figure to a PNG image in bytes."""
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches='tight', dpi=300)
-    buf.seek(0)
-    return buf
-
-# --- Chart Functions ---
-
-def plot_top_salaries_by_department(df):
-    """Plots the highest salary in each department."""
-    if df.empty or not all(col in df.columns for col in ['dept_name', 'salary_amount']):
-        st.warning("Insufficient data for 'Top Salaries by Department'. Missing 'dept_name' or 'salary_amount'.")
-        return
-
-    plot_data = df.dropna(subset=['dept_name', 'salary_amount']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Top Salaries by Department'.")
-        return
-    
-    top_salary_per_dept = plot_data.groupby("dept_name")['salary_amount'].max().reset_index()
-    top_salary_per_dept = top_salary_per_dept.sort_values('salary_amount', ascending=False)
-    
-    fig, ax = plt.subplots(figsize=(12, 7))
-    sns.barplot(data=top_salary_per_dept, x="salary_amount", y="dept_name", ax=ax, palette='viridis')
-    ax.set_title("💰 Highest Salary Found Per Department", fontsize=16)
-    ax.set_xlabel("Highest Salary Amount (USD)")
-    ax.set_ylabel("Department")
-    plt.tight_layout()
+# الرسم مع خاصية التحميل
+def show_chart_with_download(fig, filename, explanation):
     st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Top Salaries", data=fig_to_image(fig), 
-                     file_name="top_salaries_by_department.png", mime="image/png")
+    st.markdown(f"📌 {explanation}")
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png")
+    st.download_button("⬇️ Download Chart", data=buffer.getvalue(), file_name=filename, mime="image/png")
 
-def plot_annual_salary_growth(df):
-    """Plots the average annual salary growth over time."""
-    if df.empty or not all(col in df.columns for col in ['growth_year', 'salary_growth']):
-        st.warning("Insufficient data for 'Annual Salary Growth'. Missing 'growth_year' or 'salary_growth'.")
-        return
+# الرسوم البيانية
+def plot_gender_distribution_by_job(df):
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.countplot(data=df, x='title', hue='gender', ax=ax)
+    ax.set_title("Gender Distribution by Job Title")
+    plt.xticks(rotation=45)
+    show_chart_with_download(fig, "gender_job_dist.png", "This chart shows gender distribution across job titles.")
 
-    plot_data = df.dropna(subset=['growth_year', 'salary_growth']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Annual Salary Growth'.")
-        return
-
-    plot_data_agg = plot_data.groupby("growth_year")["salary_growth"].mean().reset_index()
-    
-    fig, ax = plt.subplots(figsize=(12, 7))
-    sns.lineplot(data=plot_data_agg, x="growth_year", y="salary_growth", ax=ax, marker='o', color='royalblue')
-    ax.set_title("📈 Average Annual Salary Growth Over Time", fontsize=16)
-    ax.set_xlabel("Year")
-    ax.set_ylabel("Average Salary Growth (USD)")
-    ax.grid(True, linestyle='--', alpha=0.7)
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Salary Growth", data=fig_to_image(fig), 
-                     file_name="annual_salary_growth.png", mime="image/png")
-
-def plot_avg_salary_by_gender(df):
-    """Plots the average salary by gender."""
-    if df.empty or not all(col in df.columns for col in ['gender', 'salary_amount']):
-        st.warning("Insufficient data for 'Average Salary by Gender'. Missing 'gender' or 'salary_amount'.")
-        return
-
-    plot_data = df.dropna(subset=['gender', 'salary_amount']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Average Salary by Gender'.")
-        return
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    sns.barplot(data=plot_data, x="gender", y="salary_amount", ax=ax, estimator='mean', palette='coolwarm')
-    ax.set_title("👫 Average Salary by Gender", fontsize=16)
-    ax.set_xlabel("Gender")
-    ax.set_ylabel("Average Salary (USD)")
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Gender Salary", data=fig_to_image(fig), 
-                     file_name="average_salary_by_gender.png", mime="image/png")
-
-def plot_tenure_vs_salary(df):
-    """Plots employee tenure vs. salary."""
-    if df.empty or not all(col in df.columns for col in ['tenure_years', 'salary_amount']):
-        st.warning("Insufficient data for 'Tenure vs. Salary'. Missing 'tenure_years' or 'salary_amount'.")
-        return
-
-    plot_data = df.dropna(subset=["tenure_years", "salary_amount"]).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Tenure vs. Salary'.")
-        return
-
-    fig, ax = plt.subplots(figsize=(10, 7))
-    sns.scatterplot(data=plot_data, x="tenure_years", y="salary_amount", ax=ax, alpha=0.6, hue='gender', palette='tab10')
-    ax.set_title("📊 Employee Tenure vs. Latest Salary", fontsize=16)
-    ax.set_xlabel("Tenure (Years)")
-    ax.set_ylabel("Latest Salary Amount (USD)")
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Tenure Salary", data=fig_to_image(fig), 
-                     file_name="tenure_vs_salary.png", mime="image/png")
-
-def plot_avg_tenure_by_department(df):
-    """Plots average employee tenure by department (indicating turnover)."""
-    if df.empty or not all(col in df.columns for col in ['dept_name', 'tenure_years']):
-        st.warning("Insufficient data for 'Average Tenure by Department'. Missing 'dept_name' or 'tenure_years'.")
-        return
-
-    plot_data = df.dropna(subset=['dept_name', 'tenure_years']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Average Tenure by Department'.")
-        return
-    
-    dept_tenure = plot_data.groupby('dept_name').agg(
-        average_tenure_years=('tenure_years', 'mean')
-    ).sort_values(by='average_tenure_years', ascending=False)
-
-    fig, ax = plt.subplots(figsize=(12, 7))
-    sns.barplot(data=dept_tenure.reset_index(), x='average_tenure_years', y='dept_name', palette='crest', ax=ax)
-    ax.set_title("📉 Average Employee Tenure by Department", fontsize=16)
-    ax.set_xlabel("Average Tenure (Years)")
-    ax.set_ylabel("Department")
-    ax.grid(axis='x', linestyle='--', alpha=0.7)
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Avg Tenure", data=fig_to_image(fig), 
-                     file_name="avg_tenure_by_department.png", mime="image/png")
+def plot_average_tenure_per_department(df):
+    avg_tenure = df.groupby('dept_name')['tenure_years'].mean().sort_values(ascending=False)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    avg_tenure.plot(kind='bar', ax=ax)
+    ax.set_ylabel("Average Tenure (Years)")
+    ax.set_title("Average Tenure per Department")
+    show_chart_with_download(fig, "avg_tenure.png", "Shows how long employees stay in each department on average.")
 
 def plot_total_salary_by_department(df):
-    """Plots the total salary paid per department."""
-    if df.empty or not all(col in df.columns for col in ['dept_name', 'salary_amount']):
-        st.warning("Insufficient data for 'Total Salary by Department'. Missing 'dept_name' or 'salary_amount'.")
-        return
+    total_salary = df.groupby('dept_name')['salary_amount'].sum().sort_values(ascending=False)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    total_salary.plot(kind='bar', ax=ax)
+    ax.set_ylabel("Total Salary Paid")
+    ax.set_title("Total Salary by Department")
+    show_chart_with_download(fig, "total_salary.png", "Shows which departments have the highest total salary payouts.")
 
-    plot_data = df.dropna(subset=['dept_name', 'salary_amount']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Total Salary by Department'.")
-        return
+def plot_high_turnover_departments(df):
+    turnover_counts = df['dept_name'].value_counts().sort_values()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    turnover_counts.plot(kind='barh', ax=ax)
+    ax.set_title("Employee Count by Department (Turnover Risk)")
+    show_chart_with_download(fig, "turnover_dept.png", "Low employee count may indicate high turnover risk.")
 
-    dept_salary_total = plot_data.groupby('dept_name')['salary_amount'].sum().sort_values(ascending=False)
-    
-    fig, ax = plt.subplots(figsize=(12, 7))
-    sns.barplot(data=dept_salary_total.reset_index(), x='salary_amount', y='dept_name', palette='viridis', ax=ax)
-    ax.set_title("💰 Total Salary Paid per Department", fontsize=16)
-    ax.set_xlabel("Total Salary (USD)")
-    ax.set_ylabel("Department")
-    # Add value labels
-    for index, value in enumerate(dept_salary_total):
-        ax.text(value + 1000, index, f"${value:,.0f}", va='center')
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Total Salary", data=fig_to_image(fig), 
-                     file_name="total_salary_by_department.png", mime="image/png")
-
-def plot_employee_count_by_gender_and_title(df):
-    """Plots employee count by title and gender."""
-    if df.empty or not all(col in df.columns for col in ['latest_title', 'gender']):
-        st.warning("Insufficient data for 'Employee Count by Title & Gender'. Missing 'latest_title' or 'gender'.")
-        return
-
-    plot_data = df.dropna(subset=['latest_title', 'gender']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Employee Count by Title & Gender'.")
-        return
-
-    title_gender_count = plot_data.groupby(['latest_title', 'gender'])['id'].count().reset_index()
-    title_gender_count.rename(columns={'id': 'employee_count'}, inplace=True)
-
-    fig, ax = plt.subplots(figsize=(14, 8))
-    sns.barplot(data=title_gender_count, x='latest_title', y='employee_count', hue='gender', ax=ax, palette='plasma')
-    ax.set_title('👥 Employee Count by Latest Title & Gender', fontsize=16)
-    ax.set_xlabel('Job Title')
-    ax.set_ylabel('Number of Employees')
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Title & Gender Count", data=fig_to_image(fig), 
-                     file_name="employee_count_by_title_gender.png", mime="image/png")
-
-def plot_hiring_trend_over_time(df):
-    """Plots the number of new hires over time."""
-    if df.empty or 'hire_year' not in df.columns:
-        st.warning("Insufficient data for 'Hiring Trend Over Time'. Missing 'hire_year'.")
-        return
-
-    plot_data = df.dropna(subset=['hire_year']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Hiring Trend Over Time'.")
-        return
-
-    hire_trend = plot_data['hire_year'].value_counts().sort_index()
-
-    fig, ax = plt.subplots(figsize=(12, 7))
-    hire_trend.plot(kind='line', marker='o', ax=ax, color='forestgreen')
-    ax.set_title('📈 Hiring Trend Over Time (Number of New Hires per Year)', fontsize=16)
-    ax.set_xlabel("Hire Year")
-    ax.set_ylabel("Number of Hires")
-    ax.grid(True, linestyle='--', alpha=0.7)
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Hiring Trend", data=fig_to_image(fig), 
-                     file_name="hiring_trend_over_time.png", mime="image/png")
+def plot_top_salaries_by_department(df):
+    top_salaries = df.groupby('dept_name')['salary_amount'].max().sort_values(ascending=False)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    top_salaries.plot(kind='bar', ax=ax)
+    ax.set_ylabel("Top Salary")
+    ax.set_title("Top Salary by Department")
+    show_chart_with_download(fig, "top_salary.png", "Shows the maximum salary paid in each department.")
 
 def plot_salary_gap_by_gender_per_department(df):
-    """Plots salary gap by gender per department."""
-    if df.empty or not all(col in df.columns for col in ['dept_name', 'gender', 'salary_amount']):
-        st.warning("Insufficient data for 'Salary Gap by Gender per Department'. Missing 'dept_name', 'gender', or 'salary_amount'.")
-        return
+    gap_df = df.groupby(['dept_name', 'gender'])['salary_amount'].mean().unstack()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    gap_df.plot(kind='bar', ax=ax)
+    ax.set_ylabel("Average Salary")
+    ax.set_title("Salary Gap by Gender per Department")
+    show_chart_with_download(fig, "salary_gap.png", "Displays average salary differences between genders.")
 
-    plot_data = df.dropna(subset=['dept_name', 'gender', 'salary_amount']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Salary Gap by Gender per Department'.")
-        return
+def plot_annual_salary_growth(salary_df):
+    salary_df['year'] = salary_df['from_date'].dt.year
+    growth = salary_df.groupby('year')['salary'].mean()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    growth.plot(marker='o', ax=ax)
+    ax.set_ylabel("Average Salary")
+    ax.set_title("Annual Salary Growth")
+    show_chart_with_download(fig, "salary_growth.png", "Tracks average salary changes over the years.")
 
-    gap_data = plot_data.groupby(['dept_name', 'gender'])['salary_amount'].mean().unstack()
+# ----------------- واجهة المستخدم ------------------
 
-    if gap_data.empty:
-        st.warning("No sufficient gender data per department for 'Salary Gap by Gender per Department'.")
-        return
+st.image("https://cdn-icons-png.flaticon.com/512/2950/2950731.png", width=80)
+st.title("📊 Advanced HR Analytics Dashboard")
+st.markdown("""
+Welcome to the **HR Insights Dashboard** – your central hub for analyzing employee performance, salary trends, turnover risks, and more.
 
-    fig, ax = plt.subplots(figsize=(14, 8))
-    gap_data.plot(kind='bar', ax=ax, cmap='viridis')
-    ax.set_title('💸 Average Salary by Gender per Department', fontsize=16)
-    ax.set_ylabel('Average Salary (USD)')
-    ax.set_xlabel('Department')
-    plt.xticks(rotation=45, ha='right')
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Salary Gap", data=fig_to_image(fig), 
-                     file_name="salary_gap_by_gender_per_department.png", mime="image/png")
+Explore data-driven insights to help HR teams make smarter decisions.
+""")
 
-def plot_avg_age_vs_promotions(df):
-    """Plots average age vs. number of promotions."""
-    if df.empty or not all(col in df.columns for col in ['num_promotions', 'age']):
-        st.warning("Insufficient data for 'Average Age vs. Number of Promotions'. Missing 'num_promotions' or 'age'.")
-        return
-
-    plot_data = df.dropna(subset=['num_promotions', 'age']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Average Age vs. Number of Promotions'.")
-        return
-
-    avg_age_by_promo = plot_data.groupby('num_promotions')['age'].mean().reset_index()
-
-    fig, ax = plt.subplots(figsize=(10, 7))
-    sns.lineplot(data=avg_age_by_promo, x='num_promotions', y='age', marker='o', ax=ax, color='purple')
-    ax.set_title('📊 Average Age vs. Number of Promotions', fontsize=16)
-    ax.set_xlabel('Number of Promotions')
-    ax.set_ylabel('Average Age (Years)')
-    ax.grid(True, linestyle='--', alpha=0.7)
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Age vs Promotions", data=fig_to_image(fig), 
-                     file_name="avg_age_vs_promotions.png", mime="image/png")
-
-def plot_attrition_risk_heatmap(df):
-    """Plots a heatmap of average attrition risk score per department."""
-    if df.empty or not all(col in df.columns for col in ['dept_name', 'risk_score']):
-        st.warning("Insufficient data for 'Attrition Risk Heatmap'. Missing 'dept_name' or 'risk_score'.")
-        return
-
-    plot_data = df.dropna(subset=['dept_name', 'risk_score']).copy()
-    if plot_data.empty:
-        st.warning("No valid data points after dropping missing values for 'Attrition Risk Heatmap'.")
-        return
-
-    risk_heat = plot_data.groupby('dept_name')['risk_score'].mean().sort_values()
-    
-    fig, ax = plt.subplots(figsize=(12, 2)) # Adjust size for heatmap of a single row/column
-    sns.heatmap(risk_heat.to_frame().T, cmap='Reds', annot=True, fmt=".2f", linewidths=.5, ax=ax,
-                cbar_kws={'label': 'Average Risk Score'})
-    ax.set_title('🔥 Average Attrition Risk Score per Department', fontsize=16)
-    ax.set_ylabel('') # No y-label for single row
-    ax.tick_params(axis='y', length=0) # Hide y-axis ticks
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.download_button("⬇️ Download Chart: Attrition Risk", data=fig_to_image(fig), 
-                     file_name="attrition_risk_heatmap.png", mime="image/png")
-
-# --- Main Application Layout ---
-
-st.title("Advanced HR Analytics Dashboard")
-st.markdown("Welcome to the HR Analytics Dashboard! Explore key insights into your employee data.")
-
-# --- Sidebar for Navigation ---
-st.sidebar.header("Navigation")
+# الشريط الجانبي
+st.sidebar.title("🧭 Navigation")
 analysis_options = [
-    "Dashboard Overview",
+    "Gender Analysis",
+    "Tenure Analysis",
     "Salary Analysis",
-    "Tenure & Turnover",
-    "Demographics & Promotions",
-    "Attrition Risk Analysis",
-    "Raw Data Viewer"
+    "Turnover Risk",
+    "Unsupported Questions"
 ]
-selected_analysis = st.sidebar.radio("Go to Section:", analysis_options)
+selected_analysis = st.sidebar.radio("📌 Select Analysis Section:", analysis_options)
 
-# --- Main Content Area ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("💡 **Ask a Question**")
+question = st.sidebar.text_input("What do you want to know?")
 
-if selected_analysis == "Dashboard Overview":
-    st.header("Dashboard Overview")
-    st.write("This section provides a quick summary of key HR metrics.")
+# ---------- التحليل حسب الاختيار ----------
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Total Employees")
-        if not employee_raw.empty:
-            st.metric(label="Total Employees", value=employee_raw['id'].nunique())
-        else:
-            st.warning("Employee data not loaded.")
+if selected_analysis == "Gender Analysis":
+    st.header("👩‍💼 Gender Analysis")
+    plot_gender_distribution_by_job(employee_df)
+    plot_salary_gap_by_gender_per_department(employee_df)
 
-    with col2:
-        st.subheader("Average Employee Tenure (All)")
-        if not employee_enriched_df.empty and 'tenure_years' in employee_enriched_df.columns:
-            avg_tenure = employee_enriched_df['tenure_years'].mean()
-            st.metric(label="Average Tenure (Years)", value=f"{avg_tenure:.1f}")
-        else:
-            st.warning("Tenure data not available.")
-    
-    st.markdown("---")
-    st.subheader("Quick Insights:")
-    # Display some common charts here for a quick overview
-    plot_hiring_trend_over_time(employee_enriched_df)
-    plot_avg_salary_by_gender(employee_enriched_df)
-
+elif selected_analysis == "Tenure Analysis":
+    st.header("🕒 Tenure Analysis")
+    plot_average_tenure_per_department(employee_df)
 
 elif selected_analysis == "Salary Analysis":
-    st.header("Salary Analysis")
-    st.write("Deep dive into salary trends and distribution within the company.")
-    
-    plot_total_salary_by_department(employee_enriched_df)
-    st.markdown("---")
-    plot_top_salaries_by_department(employee_enriched_df)
-    st.markdown("---")
-    plot_annual_salary_growth(salary_processed_df)
-    st.markdown("---")
-    plot_salary_gap_by_gender_per_department(employee_enriched_df)
+    st.header("💸 Salary Analysis")
+    tab1, tab2, tab3 = st.tabs(["Total Salary", "Top Salaries", "Growth Over Time"])
+    with tab1:
+        plot_total_salary_by_department(employee_df)
+    with tab2:
+        plot_top_salaries_by_department(employee_df)
+    with tab3:
+        plot_annual_salary_growth(salary_df)
 
+elif selected_analysis == "Turnover Risk":
+    st.header("🔁 Turnover Risk")
+    plot_high_turnover_departments(employee_df)
 
-elif selected_analysis == "Tenure & Turnover":
-    st.header("Tenure & Turnover Analysis")
-    st.write("Understand employee longevity and potential turnover areas.")
-
-    plot_avg_tenure_by_department(employee_enriched_df)
-    st.markdown("---")
-    plot_tenure_vs_salary(employee_enriched_df)
-
-
-elif selected_analysis == "Demographics & Promotions":
-    st.header("Demographics & Promotions")
-    st.write("Examine employee demographics and promotion patterns.")
-    
-    plot_employee_count_by_gender_and_title(employee_enriched_df)
-    st.markdown("---")
-    plot_avg_age_vs_promotions(employee_enriched_df)
-
-
-elif selected_analysis == "Attrition Risk Analysis":
-    st.header("Attrition Risk Analysis")
-    st.write("Identify departments or employee segments that might be at higher risk of attrition.")
-
-    plot_attrition_risk_heatmap(employee_enriched_df)
-    st.info("Note: The 'Risk Score' is a simplified indicator based on tenure, salary relative to median, and number of promotions.")
-
-elif selected_analysis == "Raw Data Viewer":
-    st.header("Raw Data Viewer")
-    st.write("View the raw and processed datasets.")
-
-    data_to_view = st.selectbox("Select Dataset to View:", 
-                                list(raw_data.keys()) + ["processed_employee_data", "processed_salary_data"])
-    
-    if data_to_view == "processed_employee_data":
-        st.subheader("Processed Employee Data")
-        if not employee_enriched_df.empty:
-            st.dataframe(employee_enriched_df)
-            st.download_button("Download Processed Employee Data (CSV)", employee_enriched_df.to_csv(index=False).encode('utf-8'), "processed_employee_data.csv", "text/csv")
-        else:
-            st.info("Processed employee data is empty.")
-    elif data_to_view == "processed_salary_data":
-        st.subheader("Processed Salary Data")
-        if not salary_processed_df.empty:
-            st.dataframe(salary_processed_df)
-            st.download_button("Download Processed Salary Data (CSV)", salary_processed_df.to_csv(index=False).encode('utf-8'), "processed_salary_data.csv", "text/csv")
-        else:
-            st.info("Processed salary data is empty.")
+elif selected_analysis == "Unsupported Questions":
+    st.header("❓ Unsupported Questions")
+    if question:
+        st.error("🚫 Sorry, this data is restricted or unsupported at the moment.")
     else:
-        st.subheader(f"Raw {data_to_view.replace('_', ' ').title()} Data")
-        if not raw_data[data_to_view].empty:
-            st.dataframe(raw_data[data_to_view])
-            st.download_button(f"Download Raw {data_to_view.replace('_', ' ').title()} Data (CSV)", raw_data[data_to_view].to_csv(index=False).encode('utf-8'), f"{data_to_view}.csv", "text/csv")
-        else:
-            st.info(f"Raw {data_to_view.replace('_', ' ').title()} data is empty.")
+        st.info("Please type your question in the sidebar.")
 
-# --- Bottom Section for "Ask a Question" (Optional, as charts are now explicit) ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("Quick Question (Experimental)")
-st.sidebar.write("Type a question and I'll try to show the relevant chart.")
-
-question = st.sidebar.text_input("Ask a question:")
-
-if question:
-    q = question.lower()
-    
-    # Map keywords to chart functions
-    if "top salaries" in q or "highest salary" in q:
-        st.header("Requested Chart: Top Salaries by Department")
-        plot_top_salaries_by_department(employee_enriched_df)
-    elif "salary growth" in q or "salary trend" in q:
-        st.header("Requested Chart: Annual Salary Growth")
-        plot_annual_salary_growth(salary_processed_df)
-    elif "gender salary" in q or "salary by gender" in q:
-        st.header("Requested Chart: Average Salary by Gender")
-        plot_avg_salary_by_gender(employee_enriched_df)
-    elif "tenure salary" in q or "tenure vs salary" in q or "salary compression" in q:
-        st.header("Requested Chart: Tenure vs. Salary")
-        plot_tenure_vs_salary(employee_enriched_df)
-    elif "average tenure" in q or "employee tenure" in q or "turnover" in q:
-        st.header("Requested Chart: Average Tenure by Department")
-        plot_avg_tenure_by_department(employee_enriched_df)
-    elif "total salary" in q or "department spending" in q:
-        st.header("Requested Chart: Total Salary Paid per Department")
-        plot_total_salary_by_department(employee_enriched_df)
-    elif "gender and title" in q or "employees by title gender" in q or "demographics title" in q:
-        st.header("Requested Chart: Employee Count by Title & Gender")
-        plot_employee_count_by_gender_and_title(employee_enriched_df)
-    elif "hiring trend" in q or "new hires" in q:
-        st.header("Requested Chart: Hiring Trend Over Time")
-        plot_hiring_trend_over_time(employee_enriched_df)
-    elif "salary gap" in q or "gender pay gap" in q:
-        st.header("Requested Chart: Salary Gap by Gender per Department")
-        plot_salary_gap_by_gender_per_department(employee_enriched_df)
-    elif "age promotions" in q or "promotions by age" in q:
-        st.header("Requested Chart: Average Age vs. Number of Promotions")
-        plot_avg_age_vs_promotions(employee_enriched_df)
-    elif "attrition risk" in q or "risk score" in q:
-        st.header("Requested Chart: Attrition Risk Heatmap")
-        plot_attrition_risk_heatmap(employee_enriched_df)
-    else:
-        st.warning("Sorry, I don't have a specific chart for that question yet. Please try selecting from the sidebar options or asking about the available charts (e.g., 'show salary growth').")
+# Footer
+st.markdown("---")
+st.markdown("<center style='font-size:13px'>📊 Built with ❤️ using Streamlit | 2025 © Your Company</center>", unsafe_allow_html=True)
