@@ -11,22 +11,23 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import io
+from datetime import datetime
 
-# Page setup
-st.set_page_config(page_title="HR Insights Dashboard", layout="wide")
+# Page configuration
+st.set_page_config(page_title="HR Insights", layout="wide")
 sns.set_style("whitegrid")
 
-# --- Data Loading ---
+# --- Load Data ---
 @st.cache_data
 def load_data():
     def read_file(name):
         try:
             df = pd.read_csv(name)
-            # Clean column names
+            # Convert column names to lowercase and clean them
             df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
             return df
         except Exception as e:
-            st.warning(f"Error loading {name}: {str(e)}")
+            st.warning(f"Error loading file {name}: {str(e)}")
             return pd.DataFrame()
 
     return (
@@ -42,40 +43,39 @@ def load_data():
 current_emp, dept_emp, employee, department, salary, title, dept_manager = load_data()
 
 # --- Data Preprocessing ---
-def preprocess_data():
-    # Process salary data
+def preprocess_data(current_emp_df, employee_df, salary_df):
     salary_processed = pd.DataFrame()
-    if not salary.empty:
+    if not salary_df.empty:
         required_cols = ['from_date', 'employee_id', 'amount']
-        if all(col in salary.columns for col in required_cols):
+        if all(col in salary_df.columns for col in required_cols):
             try:
-                salary_processed = salary.copy()
-                salary_processed['year'] = pd.to_datetime(salary_processed['from_date']).dt.year
+                salary_processed = salary_df.copy()
+                salary_processed['from_date'] = pd.to_datetime(salary_processed['from_date'], errors='coerce')
+                salary_processed['year'] = salary_processed['from_date'].dt.year
                 salary_processed = salary_processed.sort_values(['employee_id', 'from_date'])
                 salary_processed['prev_salary'] = salary_processed.groupby('employee_id')['amount'].shift(1)
                 salary_processed['salary_growth'] = salary_processed['amount'] - salary_processed['prev_salary']
-                salary_processed['growth_year'] = pd.to_datetime(salary_processed['from_date']).dt.year
+                salary_processed['growth_year'] = salary_processed['from_date'].dt.year
             except Exception as e:
                 st.error(f"Error processing salary data: {str(e)}")
     
-    # Process current employee data
-    top_salaries = pd.DataFrame()
-    if not current_emp.empty:
-        required_cols = ['dept_name', 'salary_amount']
-        if all(col in current_emp.columns for col in required_cols):
-            try:
-                top_salaries = (
-                    current_emp.groupby("dept_name", group_keys=False)
-                    .apply(lambda x: x.nlargest(10, "salary_amount"))
-                )
-            except Exception as e:
-                st.error(f"Error processing top salaries: {str(e)}")
-    
-    return salary_processed, top_salaries
+    # Calculate tenure for current_emp data if 'hire_date' exists in employee_df
+    current_emp_enriched = current_emp_df.copy()
+    if 'employee_id' in current_emp_enriched.columns and not employee_df.empty and 'id' in employee_df.columns and 'hire_date' in employee_df.columns:
+        try:
+            employee_df['hire_date'] = pd.to_datetime(employee_df['hire_date'], errors='coerce')
+            current_emp_enriched = pd.merge(current_emp_enriched, employee_df[['id', 'hire_date']],
+                                            left_on='employee_id', right_on='id', how='left')
+            current_emp_enriched['tenure'] = (pd.Timestamp(datetime.today()) - current_emp_enriched['hire_date']).dt.days / 365.25
+            current_emp_enriched.drop(columns=['id'], inplace=True) # Drop redundant 'id' column from merge
+        except Exception as e:
+            st.error(f"Error calculating tenure: {str(e)}")
 
-salary_processed, top_salaries = preprocess_data()
+    return salary_processed, current_emp_enriched
 
-# --- Helper function for saving plots ---
+salary_processed, current_emp_enriched = preprocess_data(current_emp, employee, salary)
+
+# --- Helper function to save plots ---
 def fig_to_image(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches='tight', dpi=300)
@@ -85,32 +85,42 @@ def fig_to_image(fig):
 # --- Application Interface ---
 st.title("📊 HR Analytics Dashboard")
 
-# Data diagnostics section
+# Data Diagnostics Section
 with st.expander("🔍 Data Diagnostics"):
-    st.write("### Available columns in each dataset:")
-    st.write(f"Current employees: {list(current_emp.columns) if not current_emp.empty else 'Empty'}")
-    st.write(f"Salary data: {list(salary.columns) if not salary.empty else 'Empty'}")
-    
+    st.write("### Available Columns in Each Dataset:")
+    st.write(f"Current Employee Data: {list(current_emp.columns) if not current_emp.empty else 'Empty'}")
+    st.write(f"Employee Data: {list(employee.columns) if not employee.empty else 'Empty'}")
+    st.write(f"Salary Data: {list(salary.columns) if not salary.empty else 'Empty'}")
+    st.write(f"Department Employee Data: {list(dept_emp.columns) if not dept_emp.empty else 'Empty'}")
+    st.write(f"Department Data: {list(department.columns) if not department.empty else 'Empty'}")
+    st.write(f"Title Data: {list(title.columns) if not title.empty else 'Empty'}")
+    st.write(f"Department Manager Data: {list(dept_manager.columns) if not dept_manager.empty else 'Empty'}")
+
+
     if not current_emp.empty:
-        st.write("### Sample employee data:")
+        st.write("### Sample of Current Employee Data:")
         st.write(current_emp.head(3))
 
 # --- Supported Questions ---
 allowed_questions = {
     "top salaries": {
-        "description": "Show top salaries by department",
+        "description": "Top salaries by Department",
+        "data_source": current_emp_enriched,
         "required_cols": ['dept_name', 'salary_amount']
     },
     "salary growth": {
-        "description": "Show annual salary growth", 
+        "description": "Annual Salary Growth", 
+        "data_source": salary_processed,
         "required_cols": ['growth_year', 'salary_growth']
     },
     "gender salary": {
-        "description": "Show average salary by gender",
+        "description": "Average Salary by Gender",
+        "data_source": current_emp_enriched,
         "required_cols": ['gender', 'salary_amount']
     },
     "tenure salary": {
-        "description": "Show salary vs tenure",
+        "description": "Tenure vs. Salary",
+        "data_source": current_emp_enriched,
         "required_cols": ['tenure', 'salary_amount']
     }
 }
@@ -123,79 +133,72 @@ if question:
     matched = [key for key in allowed_questions if key in q]
     
     if matched:
-        question_info = allowed_questions[matched[0]]
+        question_key = matched[0]
+        question_info = allowed_questions[question_key]
         st.success(f"✅ Preparing: {question_info['description']}")
         
+        source_df = question_info['data_source']
+
         # Check for required columns
-        missing_cols = [col for col in question_info['required_cols'] 
-                       if col not in current_emp.columns and col not in salary_processed.columns]
+        missing_cols = [col for col in question_info['required_cols'] if col not in source_df.columns]
         
         if missing_cols:
-            st.error(f"Required columns missing: {missing_cols}")
+            st.error(f"Required columns are missing from the dataset: {missing_cols}. Please check data availability.")
         else:
             try:
                 fig, ax = plt.subplots(figsize=(10, 6))
                 
-                if "top salaries" in matched[0]:
-                    if not top_salaries.empty:
-                        plot_data = top_salaries.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
-                        sns.barplot(data=plot_data, x="dept_name", y="salary_amount", ax=ax)
-                        ax.set_title("Top Salaries by Department")
-                        plt.xticks(rotation=45)
+                if "top salaries" == question_key:
+                    if not source_df.empty:
+                        # Assuming salary_amount is present after merging
+                        if 'salary_amount' in source_df.columns:
+                            plot_data = source_df.groupby("dept_name", group_keys=False).apply(lambda x: x.nlargest(1, "salary_amount")).sort_values("salary_amount", ascending=False)
+                            sns.barplot(data=plot_data, x="dept_name", y="salary_amount", ax=ax)
+                            ax.set_title("Top Salaries by Department")
+                            ax.set_xlabel("Department")
+                            ax.set_ylabel("Salary Amount")
+                            plt.xticks(rotation=45)
+                        else:
+                            st.warning("`salary_amount` column not found for 'top salaries' analysis.")
+                    else:
+                        st.warning("Current employee data is empty, cannot generate 'top salaries' plot.")
                 
-                elif "salary growth" in matched[0]:
-                    if not salary_processed.empty:
-                        plot_data = salary_processed.groupby("growth_year")["salary_growth"].mean().reset_index()
+                elif "salary growth" == question_key:
+                    if not source_df.empty and 'growth_year' in source_df.columns and 'salary_growth' in source_df.columns:
+                        plot_data = source_df.groupby("growth_year")["salary_growth"].mean().reset_index()
                         sns.lineplot(data=plot_data, x="growth_year", y="salary_growth", ax=ax, marker='o')
                         ax.set_title("Annual Salary Growth")
+                        ax.set_xlabel("Year")
+                        ax.set_ylabel("Average Salary Growth")
+                    else:
+                        st.warning("Salary data is empty or missing required columns for 'salary growth' analysis.")
                 
-                elif "gender salary" in matched[0]:
-                    if not current_emp.empty:
-                        sns.barplot(data=current_emp, x="gender", y="salary_amount", ax=ax, estimator='mean')
+                elif "gender salary" == question_key:
+                    if not source_df.empty and 'gender' in source_df.columns and 'salary_amount' in source_df.columns:
+                        sns.barplot(data=source_df, x="gender", y="salary_amount", ax=ax, estimator='mean')
                         ax.set_title("Average Salary by Gender")
+                        ax.set_xlabel("Gender")
+                        ax.set_ylabel("Average Salary")
+                    else:
+                        st.warning("Current employee data is empty or missing required columns for 'gender salary' analysis.")
                 
-                elif "tenure salary" in matched[0]:
-                    if not current_emp.empty:
-                        current_emp_clean = current_emp.dropna(subset=["tenure", "salary_amount"])
+                elif "tenure salary" == question_key:
+                    if not source_df.empty and 'tenure' in source_df.columns and 'salary_amount' in source_df.columns:
+                        current_emp_clean = source_df.dropna(subset=["tenure", "salary_amount"])
                         sns.scatterplot(data=current_emp_clean, x="tenure", y="salary_amount", ax=ax)
-                        ax.set_title("Salary vs Tenure")
+                        ax.set_title("Tenure vs. Salary")
+                        ax.set_xlabel("Tenure (Years)")
+                        ax.set_ylabel("Salary Amount")
+                    else:
+                        st.warning("Current employee data is empty or missing required columns for 'tenure salary' analysis.")
                 
                 st.pyplot(fig)
                 st.download_button("⬇️ Download Chart", data=fig_to_image(fig), 
-                                 file_name=f"{matched[0]}.png", mime="image/png")
+                                 file_name=f"{question_key}.png", mime="image/png")
                 
             except Exception as e:
-                st.error(f"Error generating visualization: {str(e)}")
+                st.error(f"An error occurred while creating the chart: {str(e)}")
     else:
         st.warning("Question not supported. Available questions:")
-        for q, info in allowed_questions.items():
-            st.write(f"- {q}: {info['description']}")
-
-# --- Additional Analysis Sections ---
-st.sidebar.header("Additional Analysis Options")
-
-if st.sidebar.checkbox("Show Department Summary"):
-    if not department.empty and not current_emp.empty:
-        st.subheader("Department Summary")
-        dept_summary = current_emp.groupby('dept_name').agg(
-            employee_count=('employee_id', 'nunique'),
-            avg_salary=('salary_amount', 'mean')
-        ).sort_values('avg_salary', ascending=False)
-        st.dataframe(dept_summary.style.background_gradient(cmap='Blues'))
-
-if st.sidebar.checkbox("Show Salary Distribution"):
-    if not current_emp.empty:
-        st.subheader("Salary Distribution")
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.histplot(current_emp['salary_amount'], bins=30, kde=True, ax=ax)
-        ax.set_title("Salary Distribution Across Organization")
-        st.pyplot(fig)
-
-if st.sidebar.checkbox("Show Employee Tenure Analysis"):
-    if not current_emp.empty and 'tenure' in current_emp.columns:
-        st.subheader("Tenure Analysis")
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.boxplot(data=current_emp, x='dept_name', y='tenure', ax=ax)
-        ax.set_title("Employee Tenure by Department")
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
+        for q_key, info in allowed_questions.items():
+            st.write(f"- **{q_key}**: {info['description']}")
