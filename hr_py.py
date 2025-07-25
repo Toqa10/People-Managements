@@ -8,122 +8,138 @@ Original file is located at
 """
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-import io
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
 
-# ==================== PAGE SETUP ====================
-st.set_page_config(page_title="📊 HR Analytics Dashboard", page_icon="📁", layout="wide")
+# ===================== #
+# 1. Load Data
+# ===================== #
+@st.cache_data
+def load_data():
+    employee = pd.read_csv("employee.csv")
+    salary = pd.read_csv("salary.csv")
+    title = pd.read_csv("title.csv")
+    department = pd.read_csv("department.csv")
+    dept_emp = pd.read_csv("department_employee.csv")
+    return employee, salary, title, department, dept_emp
 
-# ==================== CUSTOM CSS ====================
+employee, salary, title, department, dept_emp = load_data()
+
+# ===================== #
+# 2. Helper to download charts
+# ===================== #
+def get_image_download_link(fig):
+    buffer = BytesIO()
+    fig.savefig(buffer, format='png')
+    buffer.seek(0)
+    b64 = base64.b64encode(buffer.read()).decode()
+    href = f'<a href="data:file/png;base64,{b64}" download="chart.png">📥 Download Chart</a>'
+    return href
+
+# ===================== #
+# 3. Custom CSS for styling
+# ===================== #
 st.markdown("""
-<style>
-.stApp {
-    background-color: #f0f2f6;
-}
-h1, h2, h3 {
-    text-align: center;
-    color: #0f4c81;
-}
-.chart-explanation {
-    text-align: center;
-    font-size: 16px;
-    color: #444;
-    margin-top: 10px;
-}
-.stButton>button {
-    background-color: #0f4c81;
-    color: white;
-    font-weight: bold;
-    border-radius: 8px;
-    padding: 8px 24px;
-    margin: 5px;
-}
-.stFileUploader {
-    border: 2px dashed #0f4c81;
-}
-</style>
+    <style>
+        .main-title {
+            text-align: center;
+            font-size: 36px;
+            color: #2c3e50;
+        }
+        .sub-title {
+            text-align: center;
+            font-size: 20px;
+            color: #34495e;
+        }
+        .chart-explanation {
+            text-align: center;
+            color: #555;
+            margin-top: 10px;
+        }
+        .stButton button {
+            width: 100%;
+            padding: 10px;
+            font-size: 18px;
+        }
+        .chart-container {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 20px;
+            background-color: #f9f9f9;
+            margin-top: 20px;
+        }
+    </style>
 """, unsafe_allow_html=True)
 
-# ==================== TITLE ====================
-st.markdown("## 📊 Welcome to the HR Analytics Dashboard")
+# ===================== #
+# 4. Title and Input UI
+# ===================== #
+st.markdown("<div class='main-title'>📊 HR Analytics Dashboard</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-title'>Ask any HR insight question and get a chart instantly!</div>", unsafe_allow_html=True)
 
-# ==================== FILE UPLOAD ====================
-st.subheader("📂 Upload your HR dataset (CSV files only)")
-uploaded_file = st.file_uploader("Choose your main HR file (employee.csv)", type="csv")
+st.write("")
 
-# ==================== QUESTION HANDLING ====================
-st.subheader("💬 Ask your HR question")
+user_input = st.text_input("💬 Enter your HR Question here:")
 
-question = st.text_input("Type your question here...", placeholder="e.g. What is the gender distribution across job titles?")
-submit = st.button("Submit")
-clear = st.button("Clear")
+col1, col2 = st.columns([1, 1])
+submit = col1.button("🚀 Submit")
+clear = col2.button("❌ Clear")
+
+# ===================== #
+# 5. Question Handler
+# ===================== #
+def show_chart(fig, explanation):
+    st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+    st.pyplot(fig)
+    st.markdown(f'<div class="chart-explanation">{explanation}</div>', unsafe_allow_html=True)
+    st.markdown(get_image_download_link(fig), unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+if submit:
+    if "gender" in user_input.lower():
+        gender_title = pd.merge(employee, title, on="emp_id")
+        fig, ax = plt.subplots()
+        sns.countplot(data=gender_title, x="gender", hue="title", ax=ax)
+        ax.set_title("Gender Distribution by Job Title")
+        show_chart(fig, "This chart shows how males and females are distributed across different job titles.")
+    elif "promotion" in user_input.lower():
+        current_year = 2025
+        employee["last_promotion_year"] = pd.to_datetime(employee["last_promotion_date"]).dt.year
+        employee["years_since_promotion"] = current_year - employee["last_promotion_year"]
+        fig, ax = plt.subplots()
+        sns.histplot(employee["years_since_promotion"], bins=10, kde=True, ax=ax)
+        ax.set_title("Years Since Last Promotion")
+        show_chart(fig, "This histogram shows how long it's been since employees last received a promotion.")
+    elif "salary" in user_input.lower() and "growth" in user_input.lower():
+        salary["from_date"] = pd.to_datetime(salary["from_date"])
+        salary["year"] = salary["from_date"].dt.year
+        avg_salary_by_year = salary.groupby("year")["salary"].mean().reset_index()
+        fig, ax = plt.subplots()
+        sns.lineplot(data=avg_salary_by_year, x="year", y="salary", marker="o", ax=ax)
+        ax.set_title("Average Salary Growth Over Time")
+        show_chart(fig, "This line chart shows the trend in average salary over the years.")
+    elif "stable" in user_input.lower() or "stability" in user_input.lower():
+        emp_dept = pd.merge(dept_emp, department, on="dept_id")
+        emp_count = emp_dept["dept_name"].value_counts()
+        fig, ax = plt.subplots()
+        emp_count.plot(kind="bar", ax=ax)
+        ax.set_title("Employee Count per Department")
+        ax.set_ylabel("Number of Employees")
+        show_chart(fig, "This chart shows the number of employees in each department (an indicator of stability).")
+    elif "turnover" in user_input.lower():
+        left_employees = employee[employee["status"] == "Left"]
+        turnover_by_dept = pd.merge(left_employees, dept_emp, on="emp_id")
+        turnover_by_dept = pd.merge(turnover_by_dept, department, on="dept_id")
+        turnover_count = turnover_by_dept["dept_name"].value_counts()
+        fig, ax = plt.subplots()
+        turnover_count.plot(kind="bar", color="tomato", ax=ax)
+        ax.set_title("Turnover by Department")
+        ax.set_ylabel("Number of Employees Left")
+        show_chart(fig, "This bar chart shows departments with the highest employee turnover.")
+    else:
+        st.warning("❗This data is restricted or unsupported question.")
 
 if clear:
     st.experimental_rerun()
-
-# ==================== PROCESSING ====================
-if uploaded_file and submit and question:
-    try:
-        df = pd.read_csv(uploaded_file)
-
-        # Example visualizations based on keyword matching
-        if "gender" in question.lower() and "title" in question.lower():
-            fig, ax = plt.subplots(figsize=(10, 5))
-            sns.countplot(data=df, x='title', hue='gender', palette='pastel', ax=ax)
-            ax.set_title("Gender Distribution Across Job Titles", fontsize=14)
-            ax.set_xlabel("Job Title")
-            ax.set_ylabel("Count")
-            plt.xticks(rotation=45)
-            st.pyplot(fig)
-            st.markdown("<div class='chart-explanation'>يوضح هذا الرسم التوزيع بين الجنسين في كل مسمّى وظيفي.</div>", unsafe_allow_html=True)
-
-        elif "tenure" in question.lower() or "average years" in question.lower():
-            if "department" in df.columns and "tenure" in df.columns:
-                avg_tenure = df.groupby("department")["tenure"].mean().sort_values()
-                fig, ax = plt.subplots(figsize=(10, 5))
-                avg_tenure.plot(kind='barh', color='#0f4c81', ax=ax)
-                ax.set_title("Average Tenure per Department")
-                ax.set_xlabel("Years")
-                st.pyplot(fig)
-                st.markdown("<div class='chart-explanation'>يوضح هذا الرسم عدد سنوات العمل في كل قسم كمعدل.</div>", unsafe_allow_html=True)
-
-        elif "promotion" in question.lower() and "years" in question.lower():
-            if "last_promotion_years" in df.columns:
-                fig, ax = plt.subplots()
-                sns.histplot(df["last_promotion_years"], bins=10, kde=True, color="#0f4c81", ax=ax)
-                ax.set_title("Years Since Last Promotion")
-                ax.set_xlabel("Years")
-                ax.set_ylabel("Count")
-                st.pyplot(fig)
-                st.markdown("<div class='chart-explanation'>يوضح هذا الرسم عدد السنوات منذ آخر ترقية لكل موظف.</div>", unsafe_allow_html=True)
-
-        elif "salary" in question.lower() and "gender" in question.lower():
-            if "salary" in df.columns and "gender" in df.columns:
-                fig, ax = plt.subplots(figsize=(6, 4))
-                sns.boxplot(data=df, x="gender", y="salary", palette="Set2", ax=ax)
-                ax.set_title("Salary Distribution by Gender")
-                st.pyplot(fig)
-                st.markdown("<div class='chart-explanation'>يوضح هذا الرسم الفروقات في المرتبات بين الذكور والإناث.</div>", unsafe_allow_html=True)
-
-        elif "turnover" in question.lower() or "attrition" in question.lower():
-            if "department" in df.columns and "attrition" in df.columns:
-                dept_attr = df[df["attrition"] == "Yes"]["department"].value_counts()
-                fig, ax = plt.subplots()
-                dept_attr.plot(kind='bar', color='#ff6f61', ax=ax)
-                ax.set_title("Departments with Highest Turnover")
-                ax.set_ylabel("Attritions")
-                st.pyplot(fig)
-                st.markdown("<div class='chart-explanation'>يوضح هذا الرسم عدد الاستقالات في كل قسم.</div>", unsafe_allow_html=True)
-
-        else:
-            st.warning("❌ Sorry, I can't answer that question. This data is restricted or unsupported.")
-
-        # Optional download
-        if 'fig' in locals():
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png")
-            st.download_button("📥 Download Chart", buf.getvalue(), "chart.png", "image/png")
-
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
