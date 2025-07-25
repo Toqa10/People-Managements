@@ -71,6 +71,7 @@ Original file is located at
 #     st.success(f"تقييم المخاطر المتوقع: {prediction}")
 #
 # --- Streamlit HR Analytics App ---
+# --- Streamlit HR Analytics App ---
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -80,16 +81,20 @@ import seaborn as sns
 @st.cache_data
 
 def load_data():
-    current_emp_snapchat = pd.read_csv("current_emp_snapchat.csv")
+    try:
+        current_emp_snapshot = pd.read_csv("current_employee_snapshot.csv")
+    except FileNotFoundError:
+        current_emp_snapshot = pd.DataFrame()
+
     department_employee = pd.read_csv("department_employee.csv")
     employee = pd.read_csv("employee.csv")
     department = pd.read_csv("department.csv")
     salary = pd.read_csv("salary_sample.csv")
     title = pd.read_csv("title.csv")
     department_manager = pd.read_csv("department_manager.csv")
-    return current_emp_snapchat, department_employee, employee, department, salary, title, department_manager
+    return current_emp_snapshot, department_employee, employee, department, salary, title, department_manager
 
-current_emp_snapchat, department_employee, employee, department, salary, title, department_manager = load_data()
+current_emp_snapshot, department_employee, employee, department, salary, title, department_manager = load_data()
 
 # --- Merge for analysis ---
 salary['year'] = pd.to_datetime(salary['from_date']).dt.year
@@ -102,7 +107,10 @@ salary_sorted['growth_year'] = pd.to_datetime(salary_sorted['from_date']).dt.yea
 merged = salary.merge(title, on='employee_id')
 
 # --- Top 10 highest-paid employees per department ---
-top_10 = current_emp_snapchat.groupby("dept_name").apply(lambda x: x.sort_values("salary_amount", ascending=False).head(10))
+if not current_emp_snapshot.empty:
+    top_10 = current_emp_snapshot.groupby("dept_name").apply(lambda x: x.sort_values("salary_amount", ascending=False).head(10))
+else:
+    top_10 = pd.DataFrame()
 
 # --- Sidebar ---
 st.title("🧑‍💼 HR Analytics Chat App")
@@ -116,18 +124,27 @@ if question:
     q = question.lower()
 
     if "top salaries" in q or "highest paid" in q:
-        st.write("📌 Top 10 highest-paid employees in each department:")
-        st.dataframe(top_10)
+        if not top_10.empty:
+            st.write("📌 Top 10 highest-paid employees in each department:")
+            st.dataframe(top_10)
+        else:
+            st.warning("📂 current_employee_snapshot.csv غير متاح")
 
     elif "top 10 departments with avg salary" in q:
-        top_avg_dept = current_emp_snapchat.groupby("dept_name")["salary_amount"].mean().sort_values(ascending=False).head(10)
-        st.write("🏆 Top 10 Departments with Highest Average Salary:")
-        st.dataframe(top_avg_dept)
+        if not current_emp_snapshot.empty:
+            top_avg_dept = current_emp_snapshot.groupby("dept_name")["salary_amount"].mean().sort_values(ascending=False).head(10)
+            st.write("🏆 Top 10 Departments with Highest Average Salary:")
+            st.dataframe(top_avg_dept)
+        else:
+            st.warning("📂 current_employee_snapshot.csv غير متاح")
 
     elif "top department" in q or "highest average" in q:
-        highest_avg_dept = current_emp_snapchat.groupby("dept_name")["salary_amount"].mean().sort_values(ascending=False).head(1)
-        st.write("🏆 Department with the highest average salary:")
-        st.dataframe(highest_avg_dept)
+        if not current_emp_snapshot.empty:
+            highest_avg_dept = current_emp_snapshot.groupby("dept_name")["salary_amount"].mean().sort_values(ascending=False).head(1)
+            st.write("🏆 Department with the highest average salary:")
+            st.dataframe(highest_avg_dept)
+        else:
+            st.warning("📂 current_employee_snapshot.csv غير متاح")
 
     elif "average salary" in q and "year" in q:
         avg_salary_per_year = salary.groupby('year')['amount'].mean().reset_index()
@@ -150,7 +167,7 @@ if question:
         st.pyplot(fig)
 
     elif "age group" in q or "most common age" in q:
-        emp_snapshot = current_emp_snapchat.merge(employee[["id", "birth_date"]], left_on="employee_id", right_on="id", how="left")
+        emp_snapshot = current_emp_snapshot.merge(employee[["id", "birth_date"]], left_on="employee_id", right_on="id", how="left")
         emp_snapshot["birth_date"] = pd.to_datetime(emp_snapshot["birth_date"])
         emp_snapshot["age"] = emp_snapshot["birth_date"].apply(lambda x: 2002 - x.year)
         emp_snapshot["age_group"] = pd.cut(emp_snapshot["age"], bins=[10, 20, 30, 40, 50, 60, 70], labels=["10s", "20s", "30s", "40s", "50s", "60s"], right=False)
