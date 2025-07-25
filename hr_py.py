@@ -80,32 +80,31 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# --- Page Config ---
-st.set_page_config(page_title="HR Analytics App", layout="wide")
+st.set_page_config(page_title="HR Insights", layout="wide")
+sns.set_style("whitegrid")
 
 # --- Load Data ---
 @st.cache_data
 def load_data():
-    def safe_read(file):
+    def read_file(name):
         try:
-            return pd.read_csv(file)
-        except:
+            return pd.read_csv(name)
+        except FileNotFoundError:
             return pd.DataFrame()
 
-    current_emp_snapshot = safe_read("current_employee_snapshot.csv")
-    department_employee = safe_read("department_employee.csv")
-    employee = safe_read("employee.csv")
-    department = safe_read("department.csv")
-    salary = safe_read("salary.csv")  # Not salary_sample.csv
-    title = safe_read("title.csv")
-    department_manager = safe_read("department_manager.csv")
+    return (
+        read_file("current_employee_snapshot.csv"),
+        read_file("department_employee.csv"),
+        read_file("employee.csv"),
+        read_file("department.csv"),
+        read_file("salary.csv"),
+        read_file("title.csv"),
+        read_file("department_manager.csv"),
+    )
 
-    return current_emp_snapshot, department_employee, employee, department, salary, title, department_manager
-
-# Load datasets
 current_emp_snapshot, department_employee, employee, department, salary, title, department_manager = load_data()
 
-# --- Data Processing ---
+# --- Preprocessing ---
 if not salary.empty:
     salary['year'] = pd.to_datetime(salary['from_date']).dt.year
     salary_sorted = salary.sort_values(['employee_id', 'from_date'])
@@ -115,85 +114,82 @@ if not salary.empty:
 else:
     salary_sorted = pd.DataFrame()
 
-merged = salary.merge(title, on='employee_id') if not salary.empty and not title.empty else pd.DataFrame()
-
+# Top salaries by department
 if not current_emp_snapshot.empty:
-    top_10 = current_emp_snapshot.groupby("dept_name").apply(
+    top_10 = current_emp_snapshot.groupby("dept_name", as_index=False).apply(
         lambda x: x.sort_values("salary_amount", ascending=False).head(10)
     ).reset_index(drop=True)
 else:
     top_10 = pd.DataFrame()
 
-# --- Layout ---
-st.title("📊 HR Analytics Chat App")
-st.markdown("Ask a question from the supported insights to see an interactive chart.")
+# --- App Layout ---
+st.title("📊 HR Insights Dashboard")
+st.markdown("Ask a question below and get visual insights from employee data.")
 
-question = st.text_input("❓ Ask your HR question (e.g., 'Show me top salaries')")
+question = st.text_input("❓ Ask a question about employee data")
 
-# --- Supported Questions ---
 allowed_questions = {
-    "top salaries": "Top 10 highest-paid employees per department.",
-    "average salary per gender": "Comparison of average salaries by gender.",
-    "tenure vs salary": "Relationship between employee tenure and salary.",
-    "salary growth": "Year-over-year salary growth trends."
+    "top salaries": "Top salaries by department",
+    "highest paid": "Top salaries by department",
+    "salary growth": "Salary growth per year",
+    "average salary per gender": "Average salary per gender",
+    "gender salary": "Average salary per gender",
+    "tenure vs salary": "Tenure vs Salary"
 }
 
-# --- Chart Rendering ---
+# --- Handle Questions ---
 if question:
     q = question.lower()
-    matched = False
-
-    for key in allowed_questions:
-        if key in q:
-            matched = key
-            break
+    matched = [key for key in allowed_questions if key in q]
 
     if matched:
-        st.success(f"✅ Showing chart for: {matched.capitalize()}")
-        st.caption(allowed_questions[matched])
+        chart_title = allowed_questions[matched[0]]
+        st.success(f"✅ Showing chart for: {chart_title}")
+        fig, ax = plt.subplots(figsize=(10, 5))
 
-        if matched == "top salaries" and not top_10.empty:
-            fig, ax = plt.subplots(figsize=(10, 5))
-            top10_plot = top_10.sort_values("salary_amount", ascending=False).drop_duplicates(subset=["dept_name"])
-            sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax)
-            ax.set_title("Top Salaries by Department", fontsize=14)
-            plt.xticks(rotation=45)
-            st.pyplot(fig)
-            st.download_button("⬇️ Download Chart", data=fig_to_bytes(fig), file_name="top_salaries.png")
-
-        elif matched == "average salary per gender" and not current_emp_snapshot.empty:
-            fig, ax = plt.subplots()
-            sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
-            ax.set_title("Average Salary per Gender")
-            st.pyplot(fig)
-            st.download_button("⬇️ Download Chart", data=fig_to_bytes(fig), file_name="gender_salary.png")
-
-        elif matched == "tenure vs salary" and not current_emp_snapshot.empty:
-            if "tenure" in current_emp_snapshot.columns and "salary_amount" in current_emp_snapshot.columns:
-                fig, ax = plt.subplots()
-                sns.scatterplot(data=current_emp_snapshot, x="tenure", y="salary_amount", ax=ax)
-                ax.set_title("Tenure vs Salary")
+        if "salary growth" in matched[0]:
+            if not salary_sorted.empty:
+                avg_growth = salary_sorted.groupby("growth_year")["salary_growth"].mean().reset_index()
+                sns.lineplot(data=avg_growth, x="growth_year", y="salary_growth", marker='o', ax=ax)
+                ax.set_title("📈 Average Salary Growth per Year")
                 st.pyplot(fig)
-                st.download_button("⬇️ Download Chart", data=fig_to_bytes(fig), file_name="tenure_vs_salary.png")
-            else:
-                st.warning("Required columns not found in current_employee_snapshot.")
+                st.caption("This shows how employee salary has increased year over year.")
+                st.download_button("⬇️ Download Chart", data=fig_to_image(fig), file_name="salary_growth.png", mime="image/png")
 
-        elif matched == "salary growth" and not salary_sorted.empty:
-            fig, ax = plt.subplots(figsize=(10, 4))
-            avg_growth = salary_sorted.groupby("growth_year")["salary_growth"].mean().reset_index()
-            sns.lineplot(data=avg_growth, x="growth_year", y="salary_growth", ax=ax)
-            ax.set_title("Average Salary Growth per Year")
-            st.pyplot(fig)
-            st.download_button("⬇️ Download Chart", data=fig_to_bytes(fig), file_name="salary_growth.png")
+        elif "top salaries" in matched[0] or "highest paid" in matched[0]:
+            if not top_10.empty:
+                top10_plot = top_10.drop_duplicates(subset=["dept_name"]).sort_values("salary_amount", ascending=False)
+                sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax)
+                ax.set_title("🏆 Highest Paid Employees by Department")
+                plt.xticks(rotation=45)
+                st.pyplot(fig)
+                st.caption("Shows top salary holders in each department.")
+                st.download_button("⬇️ Download Chart", data=fig_to_image(fig), file_name="top_salaries.png", mime="image/png")
+
+        elif "gender salary" in matched[0]:
+            if not current_emp_snapshot.empty:
+                sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
+                ax.set_title("⚖️ Average Salary by Gender")
+                st.pyplot(fig)
+                st.caption("Displays the average salary comparison between genders.")
+                st.download_button("⬇️ Download Chart", data=fig_to_image(fig), file_name="gender_salary.png", mime="image/png")
+
+        elif "tenure vs salary" in matched[0]:
+            if not current_emp_snapshot.empty:
+                current_emp_snapshot = current_emp_snapshot.dropna(subset=["tenure", "salary_amount"])
+                sns.scatterplot(data=current_emp_snapshot, x="tenure", y="salary_amount", ax=ax)
+                ax.set_title("📉 Tenure vs Salary")
+                st.pyplot(fig)
+                st.caption("Examines how employee tenure relates to salary level.")
+                st.download_button("⬇️ Download Chart", data=fig_to_image(fig), file_name="tenure_vs_salary.png", mime="image/png")
+
     else:
-        st.warning("⚠️ This data is restricted and cannot be visualized.")
-else:
-    st.info("💬 Please enter a question above to generate a chart.")
+        st.warning("🚫 This data is restricted or question is unsupported.")
 
-# --- Helper: Convert matplotlib fig to image bytes ---
-def fig_to_bytes(fig):
-    import io
+# --- Helper function for downloading charts ---
+import io
+def fig_to_image(fig):
     buf = io.BytesIO()
-    fig.savefig(buf, format="png")
+    fig.savefig(buf, format="png", bbox_inches='tight')
     buf.seek(0)
-    return buf.read()
+    return buf
