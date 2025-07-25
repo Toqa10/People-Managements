@@ -17,9 +17,10 @@ from datetime import datetime
 st.set_page_config(page_title="HR Insights", layout="wide")
 sns.set_style("whitegrid")
 
-# --- Load Data ---
+# --- Load Raw Data ---
 @st.cache_data
-def load_data():
+def load_raw_data():
+    """Loads all raw CSV files into DataFrames."""
     def read_file(name):
         try:
             df = pd.read_csv(name)
@@ -27,12 +28,13 @@ def load_data():
             df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
             return df
         except FileNotFoundError:
-            st.error(f"File not found: {name}. Please make sure all CSV files are in the correct directory.")
+            st.error(f"Error: File not found: {name}. Please ensure all CSV files are in the correct directory.")
             return pd.DataFrame()
         except Exception as e:
-            st.warning(f"Error loading file {name}: {str(e)}")
+            st.warning(f"Warning: Error loading file {name}: {str(e)}")
             return pd.DataFrame()
 
+    st.info("Loading raw data files...")
     return (
         read_file("current_employee_snapshot.csv"),
         read_file("department_employee.csv"),
@@ -43,69 +45,84 @@ def load_data():
         read_file("department_manager.csv"),
     )
 
-current_emp_raw, dept_emp_raw, employee_raw, department_raw, salary_raw, title_raw, dept_manager_raw = load_data()
+# Load raw data globally (cached)
+current_emp_raw, dept_emp_raw, employee_raw, department_raw, salary_raw, title_raw, dept_manager_raw = load_raw_data()
 
 # --- Data Preprocessing ---
-def preprocess_data(current_emp_df, employee_df, salary_df, dept_emp_df, department_df):
-    
-    # --- 1. Process Salary Data ---
+@st.cache_data
+def preprocess_data(current_emp_df, employee_df, salary_df, dept_emp_df, department_df, title_df):
+    """
+    Performs all necessary data cleaning, merging, and feature engineering.
+    Returns processed DataFrames for analysis.
+    """
+    st.info("Starting data preprocessing...")
+
+    # --- 1. Process Salary Data for Growth and Latest Salary ---
     salary_processed = pd.DataFrame()
+    latest_salaries = pd.DataFrame()
     if not salary_df.empty and all(col in salary_df.columns for col in ['from_date', 'employee_id', 'amount', 'to_date']):
         try:
             salary_df_temp = salary_df.copy()
             salary_df_temp['from_date'] = pd.to_datetime(salary_df_temp['from_date'], errors='coerce')
-            # Replace '9999-01-01' with a very distant future date for current salaries
-            salary_df_temp['to_date'] = salary_df_temp['to_date'].replace("9999-01-01", "2200-01-01") # Use a string here
+            # Handle '9999-01-01' in 'to_date' for current salaries
+            salary_df_temp['to_date'] = salary_df_temp['to_date'].replace("9999-01-01", "2200-01-01")
             salary_df_temp['to_date'] = pd.to_datetime(salary_df_temp['to_date'], errors='coerce')
             
-            # Drop rows where 'from_date' or 'to_date' couldn't be parsed
-            salary_df_temp.dropna(subset=['from_date', 'to_date'], inplace=True)
+            salary_df_temp.dropna(subset=['from_date', 'to_date', 'amount'], inplace=True)
 
-            salary_processed = salary_df_temp.sort_values(['employee_id', 'from_date'])
-            salary_processed['prev_salary'] = salary_processed.groupby('employee_id')['amount'].shift(1)
-            salary_processed['salary_growth'] = salary_processed['amount'] - salary_processed['prev_salary']
-            salary_processed['growth_year'] = salary_processed['from_date'].dt.year
-            # Get latest salary entry for each employee for current salary amount
-            latest_salaries = salary_processed.sort_values(['employee_id', 'to_date']).drop_duplicates('employee_id', keep='last')
-            latest_salaries = latest_salaries[['employee_id', 'amount']].copy()
-            latest_salaries.rename(columns={'amount': 'salary_amount'}, inplace=True) # Rename for consistency
+            if not salary_df_temp.empty:
+                # Calculate salary growth
+                salary_df_temp = salary_df_temp.sort_values(['employee_id', 'from_date'])
+                salary_df_temp['prev_salary'] = salary_df_temp.groupby('employee_id')['amount'].shift(1)
+                salary_df_temp['salary_growth'] = salary_df_temp['amount'] - salary_df_temp['prev_salary']
+                salary_df_temp['growth_year'] = salary_df_temp['from_date'].dt.year
+                salary_processed = salary_df_temp.copy()
 
+                # Get the latest salary for each employee
+                latest_salaries = salary_df_temp.sort_values(['employee_id', 'to_date'], ascending=[True, True]).drop_duplicates('employee_id', keep='last')
+                latest_salaries = latest_salaries[['employee_id', 'amount']].copy()
+                latest_salaries.rename(columns={'amount': 'salary_amount'}, inplace=True)
+            else:
+                st.warning("Salary data became empty after date parsing/NA drop. Salary-related analysis may be affected.")
         except Exception as e:
-            st.error(f"Error processing salary data: {str(e)}")
-            latest_salaries = pd.DataFrame() # Ensure it's empty if error occurs
+            st.error(f"Error during salary data processing: {str(e)}")
+            salary_processed = pd.DataFrame()
+            latest_salaries = pd.DataFrame()
     else:
-        st.warning("Salary data is empty or missing 'from_date', 'employee_id', 'amount', or 'to_date'. Skipping salary processing.")
-        latest_salaries = pd.DataFrame()
+        st.warning("Salary raw data is empty or missing expected columns for full processing.")
 
 
-    # --- 2. Process Current Employee Data (Enrichment) ---
-    current_emp_enriched = current_emp_df.copy()
-    
-    # Merge with employee data for hire_date and gender
-    if not employee_df.empty and 'id' in employee_df.columns and 'hire_date' in employee_df.columns and 'gender' in employee_df.columns:
+    # --- 2. Enrich Current Employee Data ---
+    current_emp_enriched = current_emp_df.copy() # Start with the snapshot
+
+    # Merge with employee_raw for hire_date and gender
+    if not employee_df.empty and all(col in employee_df.columns for col in ['id', 'hire_date', 'gender']):
         current_emp_enriched = pd.merge(current_emp_enriched, employee_df[['id', 'hire_date', 'gender']],
                                         left_on='employee_id', right_on='id', how='left', suffixes=('', '_emp'))
         current_emp_enriched['hire_date'] = pd.to_datetime(current_emp_enriched['hire_date'], errors='coerce')
         current_emp_enriched['tenure'] = (pd.Timestamp(datetime.today()) - current_emp_enriched['hire_date']).dt.days / 365.25
         current_emp_enriched.drop(columns=['id_emp'], errors='ignore', inplace=True)
     else:
-        st.warning("Employee raw data is empty or missing 'id', 'hire_date', or 'gender'. Tenure and Gender may be missing.")
+        st.warning("Employee raw data is empty or missing 'id', 'hire_date', or 'gender'. Tenure and Gender may be missing for current employees.")
 
     # Merge latest salary amount
     if not latest_salaries.empty:
         current_emp_enriched = pd.merge(current_emp_enriched, latest_salaries,
                                         on='employee_id', how='left')
     else:
-        st.warning("Latest salary data is empty. 'salary_amount' will be missing.")
-
+        st.warning("Latest salary data is empty from preprocessing. 'salary_amount' will be missing for current employees.")
 
     # Get latest department for current employees
-    if not dept_emp_df.empty and not department_df.empty and 'employee_id' in dept_emp_df.columns and 'department_id' in dept_emp_df.columns and 'from_date' in dept_emp_df.columns:
-        if 'id' in department_df.columns and 'dept_name' in department_df.columns:
-            dept_emp_df_temp = dept_emp_df.copy()
-            dept_emp_df_temp['from_date'] = pd.to_datetime(dept_emp_df_temp['from_date'], errors='coerce')
-            
-            latest_dept_assignments = dept_emp_df_temp.sort_values(['employee_id', 'from_date']).drop_duplicates('employee_id', keep='last')
+    if (not dept_emp_df.empty and not department_df.empty and 
+        all(col in dept_emp_df.columns for col in ['employee_id', 'department_id', 'from_date']) and
+        all(col in department_df.columns for col in ['id', 'dept_name'])):
+        
+        dept_emp_df_temp = dept_emp_df.copy()
+        dept_emp_df_temp['from_date'] = pd.to_datetime(dept_emp_df_temp['from_date'], errors='coerce')
+        dept_emp_df_temp.dropna(subset=['from_date'], inplace=True)
+
+        if not dept_emp_df_temp.empty:
+            latest_dept_assignments = dept_emp_df_temp.sort_values(['employee_id', 'from_date'], ascending=[True, True]).drop_duplicates('employee_id', keep='last')
             
             current_emp_enriched = pd.merge(current_emp_enriched, latest_dept_assignments[['employee_id', 'department_id']],
                                             on='employee_id', how='left')
@@ -113,24 +130,21 @@ def preprocess_data(current_emp_df, employee_df, salary_df, dept_emp_df, departm
                                             left_on='department_id', right_on='id', how='left', suffixes=('', '_dept'))
             current_emp_enriched.drop(columns=['id_dept'], errors='ignore', inplace=True)
         else:
-            st.warning("Department raw data is missing 'id' or 'dept_name'. Department names may be missing.")
+            st.warning("Department employee data became empty after date parsing/NA drop. Department names may be missing.")
     else:
-        st.warning("Department employee raw data or Department raw data is empty/missing key columns. Department names will be missing.")
+        st.warning("Department employee raw data or Department raw data is empty/missing key columns. Department names will be missing for current employees.")
 
-    # st.write("--- Debug: current_emp_enriched after all merges ---")
-    # st.write(current_emp_enriched.head())
-    # st.write(current_emp_enriched.columns)
-    # st.write(current_emp_enriched.isnull().sum())
-    # st.write("--- End Debug ---")
-
+    st.success("Data preprocessing completed.")
     return salary_processed, current_emp_enriched
 
-salary_processed, current_emp_enriched = preprocess_data(
-    current_emp_raw, employee_raw, salary_raw, dept_emp_raw, department_raw
+# Preprocess data globally (cached)
+salary_processed_df, current_emp_enriched_df = preprocess_data(
+    current_emp_raw, employee_raw, salary_raw, dept_emp_raw, department_raw, title_raw
 )
 
 # --- Helper function to save plots ---
 def fig_to_image(fig):
+    """Converts a matplotlib figure to a PNG image in bytes."""
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches='tight', dpi=300)
     buf.seek(0)
@@ -141,48 +155,49 @@ st.title("📊 HR Analytics Dashboard")
 
 # Data Diagnostics Section
 with st.expander("🔍 Data Diagnostics"):
-    st.write("### Available Columns in Each Dataset:")
-    st.write(f"Current Employee Data (Processed): {list(current_emp_enriched.columns) if not current_emp_enriched.empty else 'Empty'}")
-    st.write(f"Employee Data (Raw): {list(employee_raw.columns) if not employee_raw.empty else 'Empty'}")
-    st.write(f"Salary Data (Raw): {list(salary_raw.columns) if not salary_raw.empty else 'Empty'}")
-    st.write(f"Department Employee Data (Raw): {list(dept_emp_raw.columns) if not dept_emp_raw.empty else 'Empty'}")
-    st.write(f"Department Data (Raw): {list(department_raw.columns) if not department_raw.empty else 'Empty'}")
-    st.write(f"Title Data (Raw): {list(title_raw.columns) if not title_raw.empty else 'Empty'}")
-    st.write(f"Department Manager Data (Raw): {list(dept_manager_raw.columns) if not dept_manager_raw.empty else 'Empty'}")
+    st.write("### Available Columns in Raw Datasets:")
+    st.write(f"Current Employee Snapshot: {list(current_emp_raw.columns) if not current_emp_raw.empty else 'Empty'}")
+    st.write(f"Employee: {list(employee_raw.columns) if not employee_raw.empty else 'Empty'}")
+    st.write(f"Salary: {list(salary_raw.columns) if not salary_raw.empty else 'Empty'}")
+    st.write(f"Department Employee: {list(dept_emp_raw.columns) if not dept_emp_raw.empty else 'Empty'}")
+    st.write(f"Department: {list(department_raw.columns) if not department_raw.empty else 'Empty'}")
+    st.write(f"Title: {list(title_raw.columns) if not title_raw.empty else 'Empty'}")
+    st.write(f"Department Manager: {list(dept_manager_raw.columns) if not dept_manager_raw.empty else 'Empty'}")
 
-    if not current_emp_enriched.empty:
-        st.write("### Sample of Enriched Current Employee Data:")
-        st.write(current_emp_enriched.head(3))
+    st.write("### Sample of Enriched Current Employee Data:")
+    if not current_emp_enriched_df.empty:
+        st.write(current_emp_enriched_df.head())
         st.write("### Missing values in Enriched Current Employee Data:")
-        st.write(current_emp_enriched.isnull().sum())
-
+        st.write(current_emp_enriched_df.isnull().sum())
+    else:
+        st.warning("Enriched current employee data is empty. Some charts may not be available.")
 
 # --- Supported Questions ---
 allowed_questions = {
     "top salaries": {
         "description": "Top Salaries by Department",
-        "data_source": current_emp_enriched,
+        "data_source": current_emp_enriched_df,
         "required_cols": ['dept_name', 'salary_amount']
     },
     "salary growth": {
-        "description": "Annual Salary Growth", 
-        "data_source": salary_processed,
+        "description": "Annual Salary Growth",
+        "data_source": salary_processed_df,
         "required_cols": ['growth_year', 'salary_growth']
     },
     "gender salary": {
         "description": "Average Salary by Gender",
-        "data_source": current_emp_enriched,
+        "data_source": current_emp_enriched_df,
         "required_cols": ['gender', 'salary_amount']
     },
     "tenure salary": {
         "description": "Tenure vs. Salary",
-        "data_source": current_emp_enriched,
+        "data_source": current_emp_enriched_df,
         "required_cols": ['tenure', 'salary_amount']
     }
 }
 
 # --- Question Interface ---
-question = st.text_input("❓ Ask a question about employee data")
+question = st.text_input("❓ Ask a question about employee data (e.g., 'Show top salaries')")
 
 if question:
     q = question.lower()
@@ -195,26 +210,25 @@ if question:
         
         source_df = question_info['data_source']
 
-        # Critical check: is the source_df empty?
+        # Critical check: is the source_df empty after preprocessing?
         if source_df.empty:
-            st.error(f"The data required for '{question_info['description']}' is empty. This might be due to issues in data loading or preprocessing.")
+            st.error(f"The data required for '{question_info['description']}' is empty. This might be due to issues in data loading or preprocessing. Check 'Data Diagnostics'.")
         else:
             # Check for required columns
             missing_cols = [col for col in question_info['required_cols'] if col not in source_df.columns]
             
             if missing_cols:
-                st.error(f"Required columns are missing from the dataset: {missing_cols}. Please check data availability and preprocessing steps.")
+                st.error(f"Required columns are missing from the dataset: {missing_cols}. Please check preprocessing steps and raw data availability.")
             else:
                 try:
                     fig, ax = plt.subplots(figsize=(10, 6))
                     
                     if "top salaries" == question_key:
-                        # Ensure we handle potential NaNs in grouping columns
                         plot_data = source_df.dropna(subset=['dept_name', 'salary_amount']).copy()
                         if plot_data.empty:
                             st.warning("No valid data points after dropping missing values for 'Top Salaries by Department'.")
                         else:
-                            # Group by department and find the max salary
+                            # Group by department and find the maximum salary in each
                             top_salary_per_dept = plot_data.groupby("dept_name")['salary_amount'].max().reset_index()
                             top_salary_per_dept = top_salary_per_dept.sort_values('salary_amount', ascending=False)
                             
@@ -257,12 +271,12 @@ if question:
                     
                     st.pyplot(fig)
                     st.download_button("⬇️ Download Chart", data=fig_to_image(fig), 
-                                     file_name=f"{question_key}.png", mime="image/png")
+                                     file_name=f"{question_key.replace(' ', '_')}.png", mime="image/png")
                     
                 except Exception as e:
-                    st.error(f"An error occurred while creating the chart: {str(e)}")
+                    st.error(f"An unexpected error occurred while generating the chart: {str(e)}")
                     st.exception(e) # Display full exception for debugging
     else:
-        st.warning("Question not supported. Available questions:")
+        st.warning("Question not supported. Please try one of the following:")
         for q_key, info in allowed_questions.items():
-            st.write(f"- **{q_key}**: {info['description']}")
+            st.write(f"- **{q_key.capitalize()}**: {info['description']}")
