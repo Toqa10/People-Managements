@@ -74,35 +74,38 @@ Original file is located at
 # --- Streamlit HR Analytics App ---
 # --- Streamlit HR Analytics App ---
 # --- Streamlit HR Analytics App ---
+# --- HR Analytics Streamlit App ---
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import io
 
-st.set_page_config(page_title="HR Chat Insights", layout="wide")
+st.set_page_config(page_title="HR Analytics App", layout="wide")
 
 # --- Load Data ---
 @st.cache_data
 def load_data():
-    def try_read(file):
+    def read_csv_safe(file_name):
         try:
-            return pd.read_csv(file)
-        except:
+            return pd.read_csv(file_name)
+        except FileNotFoundError:
             return pd.DataFrame()
-    
+        
     return (
-        try_read("current_employee_snapshot.csv"),
-        try_read("department_employee.csv"),
-        try_read("employee.csv"),
-        try_read("department.csv"),
-        try_read("salary_sample.csv"),
-        try_read("title.csv"),
-        try_read("department_manager.csv")
+        read_csv_safe("current_employee_snapshot.csv"),
+        read_csv_safe("department_employee.csv"),
+        read_csv_safe("employee.csv"),
+        read_csv_safe("department.csv"),
+        read_csv_safe("salary_sample.csv"),
+        read_csv_safe("title.csv"),
+        read_csv_safe("department_manager.csv")
     )
 
+# Load datasets
 current_emp_snapshot, department_employee, employee, department, salary, title, department_manager = load_data()
 
-# --- Salary Preprocessing ---
+# Preprocess salary
 if not salary.empty:
     salary['year'] = pd.to_datetime(salary['from_date']).dt.year
     salary_sorted = salary.sort_values(['employee_id', 'from_date'])
@@ -112,79 +115,112 @@ if not salary.empty:
 else:
     salary_sorted = pd.DataFrame()
 
-# --- Top 10 by Department ---
+# Merge for title-based salary
+merged = salary.merge(title, on='employee_id') if not salary.empty and not title.empty else pd.DataFrame()
+
+# Top salaries
 if not current_emp_snapshot.empty:
-    top_10 = current_emp_snapshot.groupby("dept_name").apply(
+    top_10 = current_emp_snapshot.groupby("dept_name", group_keys=False).apply(
         lambda x: x.sort_values("salary_amount", ascending=False).head(10)
-    ).reset_index(drop=True)
+    )
 else:
     top_10 = pd.DataFrame()
 
-# --- Sidebar ---
-st.title("🧑‍💼 HR Chat Insight App")
-st.sidebar.header("💬 Ask Multiple Questions")
-questions_input = st.sidebar.text_area("❓ Ask your questions (one per line)", height=200)
+# --- UI Layout ---
+st.title("🧑‍💼 HR Analytics Chat App")
+st.sidebar.header("Ask Questions")
+questions = st.sidebar.text_area("Type multiple questions (one per line)", height=200)
 
-# --- Allowed Keywords ---
-allowed_questions = {
-    "salary growth": "Average Salary Growth per Year",
-    "top salaries": "Top Salaries by Department",
-    "highest paid": "Top Salaries by Department",
-    "average salary per gender": "Average Salary per Gender",
-    "gender salary": "Average Salary per Gender",
-    "tenure vs salary": "Tenure vs Salary"
-}
+# --- Supported Questions & Chart Rendering ---
+def render_chart(fig, explanation):
+    st.pyplot(fig)
+    st.caption(f"📌 {explanation}")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    st.download_button(
+        label="📥 Download Chart as Image",
+        data=buf.getvalue(),
+        file_name="chart.png",
+        mime="image/png"
+    )
 
-# --- Chart Logic ---
-def render_chart(keyword):
-    if keyword == "salary growth" and not salary_sorted.empty:
+def handle_question(question):
+    q = question.lower().strip()
+
+    if "salary growth" in q and not salary_sorted.empty:
         fig, ax = plt.subplots(figsize=(10, 4))
         sns.lineplot(data=salary_sorted, x="growth_year", y="salary_growth", ax=ax)
         ax.set_title("Average Salary Growth per Year")
-        st.pyplot(fig)
+        render_chart(fig, "Shows how salary changed over time on average.")
 
-    elif keyword in ["top salaries", "highest paid"] and not top_10.empty:
+    elif "top salaries" in q or "highest paid" in q and not top_10.empty:
         fig, ax = plt.subplots(figsize=(12, 5))
-        top_plot = top_10.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
-        sns.barplot(data=top_plot, x="dept_name", y="salary_amount", ax=ax)
+        top10_plot = top_10.groupby("dept_name", as_index=False).first().sort_values("salary_amount", ascending=False)
+        sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax)
         ax.set_title("Top Salaries by Department")
         plt.xticks(rotation=45)
-        st.pyplot(fig)
+        render_chart(fig, "Displays the highest-paid employee in each department.")
 
-    elif keyword in ["average salary per gender", "gender salary"] and not current_emp_snapshot.empty:
+    elif "average salary per gender" in q or "gender salary" in q and not current_emp_snapshot.empty:
         fig, ax = plt.subplots()
         sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
         ax.set_title("Average Salary per Gender")
-        st.pyplot(fig)
+        render_chart(fig, "Compares average salary between genders.")
 
-    elif keyword == "tenure vs salary" and not current_emp_snapshot.empty:
+    elif "tenure vs salary" in q and not current_emp_snapshot.empty:
         if "tenure" in current_emp_snapshot.columns and "salary_amount" in current_emp_snapshot.columns:
-            df = current_emp_snapshot.dropna(subset=["tenure", "salary_amount"]).copy()
-            df = df[pd.to_numeric(df["tenure"], errors="coerce").notna()]
-            df = df[pd.to_numeric(df["salary_amount"], errors="coerce").notna()]
-            df["tenure"] = df["tenure"].astype(float)
-            df["salary_amount"] = df["salary_amount"].astype(float)
-
             fig, ax = plt.subplots()
-            sns.scatterplot(data=df, x="tenure", y="salary_amount", ax=ax)
+            sns.scatterplot(data=current_emp_snapshot, x="tenure", y="salary_amount", ax=ax)
             ax.set_title("Tenure vs Salary")
-            st.pyplot(fig)
-        else:
-            st.warning("⚠️ 'tenure' or 'salary_amount' column not found.")
+            render_chart(fig, "Analyzes the relationship between employee tenure and salary.")
 
-# --- Handle Questions ---
-if questions_input:
-    questions = [q.strip().lower() for q in questions_input.splitlines() if q.strip()]
-    for question in questions:
-        found = False
-        for key in allowed_questions.keys():
-            if key in question:
-                st.markdown(f"### ✅ Showing chart for: **{allowed_questions[key]}**")
-                render_chart(key)
-                found = True
-                break
-        if not found:
-            st.warning(f"❌ Unsupported question: '{question}' – Please rephrase or choose a supported one.")
+    elif "average salary per title" in q and not merged.empty:
+        fig, ax = plt.subplots(figsize=(12, 5))
+        avg_title = merged.groupby("title")["amount"].mean().sort_values(ascending=False).reset_index()
+        sns.barplot(data=avg_title, x="title", y="amount", ax=ax)
+        ax.set_title("Average Salary per Title")
+        plt.xticks(rotation=45)
+        render_chart(fig, "Displays which job titles earn the highest average salaries.")
 
+    elif "salary distribution" in q and not current_emp_snapshot.empty:
+        fig, ax = plt.subplots()
+        sns.histplot(current_emp_snapshot["salary_amount"], kde=True, ax=ax)
+        ax.set_title("Overall Salary Distribution")
+        render_chart(fig, "Visualizes how salaries are distributed across all employees.")
+
+    elif "department spending" in q or "total salary" in q and not current_emp_snapshot.empty:
+        fig, ax = plt.subplots(figsize=(12, 5))
+        dept_salary = current_emp_snapshot.groupby("dept_name")["salary_amount"].sum().sort_values(ascending=False).reset_index()
+        sns.barplot(data=dept_salary, x="dept_name", y="salary_amount", ax=ax)
+        ax.set_title("Total Salary Spending per Department")
+        plt.xticks(rotation=45)
+        render_chart(fig, "Shows which departments have the highest total salary expenditures.")
+
+    else:
+        st.warning(f"⚠️ Unsupported or missing data for: '{question}'")
+
+# --- Process Questions ---
+if questions:
+    for question in questions.strip().splitlines():
+        if question.strip():
+            st.markdown(f"### 🔍 {question.strip()}")
+            handle_question(question.strip())
+            st.markdown("---")
 else:
-    st.info("📝 Please enter your questions in the sidebar.")
+    st.info("📝 Enter one or more questions in the sidebar to get started.")
+
+# --- Footer ---
+st.markdown(
+    """
+    <hr style='margin-top: 40px;'>
+    <center><sub>Developed with ❤️ for HR insights</sub></center>
+    """, unsafe_allow_html=True
+)
+
+
+
+
+
+
+
+
