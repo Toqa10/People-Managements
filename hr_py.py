@@ -71,15 +71,4 @@ Original file is located at
 #     st.success(f"تقييم المخاطر المتوقع: {prediction}")
 #
 
-from pyngrok import ngrok
-import os
 
-# تأكدي إن مفيش ngrok شغال قبل كده
-ngrok.kill()
-
-# شغّلي Streamlit في الخلفية
-get_ipython().system_raw('streamlit run app.py &')
-
-# افتحي Tunnel على البورت 8501
-public_url = ngrok.connect(port=8501)
-print(f"👇 افتحي من هنا:\n{public_url}")
