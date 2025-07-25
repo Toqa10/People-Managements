@@ -74,197 +74,35 @@ Original file is located at
 # --- Streamlit HR Analytics App ---
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import joblib
 
-# --- Load Data ---
-@st.cache_data
+# Load trained model
+model = joblib.load("risk_model.pkl")
 
-def load_data():
-    try:
-        current_emp_snapshot = pd.read_csv("current_employee_snapshot.csv")
-    except FileNotFoundError:
-        current_emp_snapshot = pd.DataFrame()
+# App title
+st.title("🎯 Employee Risk Prediction App")
+st.write("Upload employee data to predict their risk score.")
 
-    department_employee = pd.read_csv("department_employee.csv")
-    employee = pd.read_csv("employee.csv")
-    department = pd.read_csv("department.csv")
-    salary = pd.read_csv("salary_sample.csv")
-    title = pd.read_csv("title.csv")
-    department_manager = pd.read_csv("department_manager.csv")
-    return current_emp_snapshot, department_employee, employee, department, salary, title, department_manager
+# Upload CSV file
+uploaded_file = st.file_uploader("📤 Upload a CSV file", type=["csv"])
 
-current_emp_snapshot, department_employee, employee, department, salary, title, department_manager = load_data()
+if uploaded_file is not None:
+    data = pd.read_csv(uploaded_file)
+    st.write("✅ Uploaded Data Preview:")
+    st.dataframe(data)
 
-# --- Merge for analysis ---
-salary['year'] = pd.to_datetime(salary['from_date']).dt.year
-salary_sorted = salary.sort_values(['employee_id', 'from_date'])
-salary_sorted['prev_salary'] = salary_sorted.groupby('employee_id')['amount'].shift(1)
-salary_sorted['salary_growth'] = salary_sorted['amount'] - salary_sorted['prev_salary']
-salary_sorted['growth_year'] = pd.to_datetime(salary_sorted['from_date']).dt.year
+    expected_cols = ['gender', 'title', 'dept_name', 'tenure', 'amount', 'num_promotions']
 
-# Merge for tenure/salary analysis
-merged = salary.merge(title, on='employee_id')
+    if all(col in data.columns for col in expected_cols):
+        input_data = data[expected_cols]
+        predictions = model.predict(input_data)
+        data['Predicted Risk'] = predictions
 
-# --- Top 10 highest-paid employees per department ---
-if not current_emp_snapshot.empty:
-    top_10 = current_emp_snapshot.groupby("dept_name").apply(lambda x: x.sort_values("salary_amount", ascending=False).head(10))
-else:
-    top_10 = pd.DataFrame()
+        st.success("✅ Predictions completed!")
+        st.dataframe(data)
 
-# --- Sidebar ---
-st.title("🧑‍💼 HR Analytics Chat App")
-st.sidebar.header("Upload Employee Data to Predict Risk")
-st.sidebar.file_uploader("📤 Upload a CSV file", type="csv")
-
-# --- Question input ---
-question = st.text_input("❓ Type your question here:")
-
-if question:
-    q = question.lower()
-
-    if "top salaries" in q or "highest paid" in q:
-        if not top_10.empty:
-            st.write("📌 Top 10 highest-paid employees in each department:")
-            st.dataframe(top_10)
-        else:
-            st.warning("📂 current_employee_snapshot.csv غير متاح")
-
-    elif "top 10 departments with avg salary" in q:
-        if not current_emp_snapshot.empty:
-            top_avg_dept = current_emp_snapshot.groupby("dept_name")["salary_amount"].mean().sort_values(ascending=False).head(10)
-            st.write("🏆 Top 10 Departments with Highest Average Salary:")
-            st.dataframe(top_avg_dept)
-        else:
-            st.warning("📂 current_employee_snapshot.csv غير متاح")
-
-    elif "top department" in q or "highest average" in q:
-        if not current_emp_snapshot.empty:
-            highest_avg_dept = current_emp_snapshot.groupby("dept_name")["salary_amount"].mean().sort_values(ascending=False).head(1)
-            st.write("🏆 Department with the highest average salary:")
-            st.dataframe(highest_avg_dept)
-        else:
-            st.warning("📂 current_employee_snapshot.csv غير متاح")
-
-    elif "average salary" in q and "year" in q:
-        avg_salary_per_year = salary.groupby('year')['amount'].mean().reset_index()
-        fig, ax = plt.subplots()
-        ax.plot(avg_salary_per_year['year'], avg_salary_per_year['amount'], marker='o')
-        ax.set_title('Average Salary Over Years')
-        ax.set_xlabel('Year')
-        ax.set_ylabel('Average Salary')
-        ax.grid(True)
-        st.pyplot(fig)
-
-    elif "salary growth" in q or "salary change" in q:
-        avg_growth = salary_sorted.groupby('growth_year')['salary_growth'].mean().reset_index()
-        fig, ax = plt.subplots()
-        ax.plot(avg_growth['growth_year'], avg_growth['salary_growth'], marker='o', color='green')
-        ax.set_title('Average Annual Salary Growth')
-        ax.set_xlabel('Year')
-        ax.set_ylabel('Average Growth')
-        ax.grid(True)
-        st.pyplot(fig)
-
-    elif "age group" in q or "most common age" in q:
-        emp_snapshot = current_emp_snapshot.merge(employee[["id", "birth_date"]], left_on="employee_id", right_on="id", how="left")
-        emp_snapshot["birth_date"] = pd.to_datetime(emp_snapshot["birth_date"])
-        emp_snapshot["age"] = emp_snapshot["birth_date"].apply(lambda x: 2002 - x.year)
-        emp_snapshot["age_group"] = pd.cut(emp_snapshot["age"], bins=[10, 20, 30, 40, 50, 60, 70], labels=["10s", "20s", "30s", "40s", "50s", "60s"], right=False)
-        top_titles = emp_snapshot.groupby("age")["title"].agg(lambda x: x.value_counts().idxmax())
-        st.dataframe(top_titles)
-
-    elif "turnover" in q or "average tenure" in q or "department tenure" in q:
-        st.subheader("🏢 Average Tenure by Department (Turnover Analysis)")
-        avg_tenure = department_employee.groupby('department_id')['tenure_years'].mean().reset_index()
-        avg_tenure.columns = ['department_id', 'avg_tenure_years']
-        high_turnover = avg_tenure.sort_values('avg_tenure_years')
-        st.dataframe(high_turnover)
-        fig, ax = plt.subplots(figsize=(10, 5))
-        sns.barplot(data=high_turnover, x='department_id', y='avg_tenure_years', palette='crest', ax=ax)
-        ax.set_title('Average Employee Tenure by Department')
-        ax.set_xlabel('Department ID')
-        ax.set_ylabel('Average Tenure (Years)')
-        ax.grid(axis='y', linestyle='--', alpha=0.5)
-        st.pyplot(fig)
-
-    elif "tenure vs salary" in q or ("tenure" in q and "salary" in q):
-        st.subheader("📊 Relationship Between Tenure and Salary")
-        merged_tenure = merged.merge(department_employee[['employee_id', 'tenure_years']], on='employee_id', how='left')
-        merged_tenure = merged_tenure.dropna(subset=['tenure_years', 'amount'])
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.scatter(merged_tenure['tenure_years'], merged_tenure['amount'], alpha=0.5, color='teal')
-        ax.set_title("Tenure vs Salary")
-        ax.set_xlabel("Tenure (Years)")
-        ax.set_ylabel("Salary")
-        ax.grid(True)
-        st.pyplot(fig)
-
-    elif "total salary" in q or "department spending" in q or "salary distribution" in q:
-        st.subheader("🏢 Total Salary Paid by Each Department")
-        dept_total_salary = merged.groupby('department_id')['amount'].sum().sort_values(ascending=False)
-        fig, ax = plt.subplots(figsize=(10, 5))
-        dept_total_salary.plot(kind='bar', ax=ax, color='skyblue')
-        ax.set_title('Total Salary Paid by Department')
-        ax.set_ylabel('Total Salary')
-        ax.set_xlabel('Department ID')
-        ax.grid(axis='y', linestyle='--', alpha=0.5)
-        st.pyplot(fig)
-
-    elif "salary overall distribution" in q or "salary histogram" in q:
-        st.subheader("📊 Overall Salary Distribution")
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.hist(merged['amount'], bins=30, edgecolor='black', color='steelblue')
-        ax.set_title("Overall Salary Distribution")
-        ax.set_xlabel("Salary")
-        ax.set_ylabel("Frequency")
-        st.pyplot(fig)
-
-    elif "average salary per title" in q or "title salary" in q:
-        st.subheader("💼 Average Salary per Title")
-        avg_salary_per_title = merged.groupby("title")["amount"].mean().sort_values(ascending=False)
-        fig, ax = plt.subplots(figsize=(10, 6))
-        avg_salary_per_title.plot(kind='bar', color='skyblue', ax=ax)
-        ax.set_title("Average Salary per Title")
-        ax.set_ylabel("Average Salary")
-        ax.set_xlabel("Title")
-        ax.grid(axis='y')
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-
-    elif "gender salary" in q or "average salary per gender" in q:
-        st.subheader("👫 Average Salary by Gender")
-        gender_salary = employee.merge(salary, left_on="id", right_on="employee_id")
-        avg_gender_salary = gender_salary.groupby("gender")["amount"].mean()
-        fig, ax = plt.subplots(figsize=(6, 4))
-        avg_gender_salary.plot(kind='bar', color=['lightblue', 'pink'], ax=ax)
-        ax.set_title("Average Salary per Gender")
-        ax.set_ylabel("Salary")
-        plt.xticks(rotation=0)
-        ax.grid(axis='y')
-        st.pyplot(fig)
-
-    elif "employee distribution" in q or "title distribution" in q:
-        st.subheader("📊 Employee Distribution by Title")
-        if "title" not in merged.columns:
-            merged = merged.merge(title[["employee_id", "title"]], on="employee_id", how="left")
-        fig, ax = plt.subplots(figsize=(10, 6))
-        merged["title"].value_counts().plot(kind='bar', color='purple', ax=ax)
-        ax.set_title("Distribution of Employees by Title")
-        ax.set_ylabel("Number of Employees")
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-
-    elif "department switch" in q or "moved departments" in q or "switching departments" in q:
-        st.subheader("🔄 Department Switching Analysis")
-        dept_switches = department_employee.groupby("employee_id")["department_id"].nunique()
-        num_switchers = (dept_switches > 1).sum()
-        st.write(f"📌 Number of employees who moved between departments: **{num_switchers}** out of **{len(dept_switches)}** total employees.")
-
+        # Download button
+        csv = data.to_csv(index=False).encode('utf-8')
+        st.download_button("⬇️ Download Results as CSV", data=csv, file_name="risk_predictions.csv", mime="text/csv")
     else:
-        st.warning("⚠️ السؤال غير مفهوم. جرّب تكتبه بطريقة تانية.")
-try:
-    salary = pd.read_csv("salary_sample.csv")
-except FileNotFoundError:
-    st.error("❌ ملف salary_sample.csv غير موجود. برجاء رفعه أولاً.")
-    salary = pd.DataFrame()  # أو ممكن تعملي exit أو st.stop()
+        st.error("❌ Missing columns. Expected: " + ", ".join(expected_cols))
