@@ -12,21 +12,21 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import io
 
-# تهيئة الصفحة
-st.set_page_config(page_title="HR Insights", layout="wide")
+# Page setup
+st.set_page_config(page_title="HR Insights Dashboard", layout="wide")
 sns.set_style("whitegrid")
 
-# --- تحميل البيانات ---
+# --- Data Loading ---
 @st.cache_data
 def load_data():
     def read_file(name):
         try:
             df = pd.read_csv(name)
-            # تحويل أسماء الأعمدة إلى أحرف صغيرة وتنظيفها
+            # Clean column names
             df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
             return df
         except Exception as e:
-            st.warning(f"حدث خطأ في تحميل ملف {name}: {str(e)}")
+            st.warning(f"Error loading {name}: {str(e)}")
             return pd.DataFrame()
 
     return (
@@ -41,9 +41,9 @@ def load_data():
 
 current_emp, dept_emp, employee, department, salary, title, dept_manager = load_data()
 
-# --- معالجة مسبقة للبيانات ---
+# --- Data Preprocessing ---
 def preprocess_data():
-    # معالجة بيانات الرواتب
+    # Process salary data
     salary_processed = pd.DataFrame()
     if not salary.empty:
         required_cols = ['from_date', 'employee_id', 'amount']
@@ -56,9 +56,9 @@ def preprocess_data():
                 salary_processed['salary_growth'] = salary_processed['amount'] - salary_processed['prev_salary']
                 salary_processed['growth_year'] = pd.to_datetime(salary_processed['from_date']).dt.year
             except Exception as e:
-                st.error(f"خطأ في معالجة بيانات الرواتب: {str(e)}")
+                st.error(f"Error processing salary data: {str(e)}")
     
-    # معالجة بيانات الموظفين الحاليين
+    # Process current employee data
     top_salaries = pd.DataFrame()
     if not current_emp.empty:
         required_cols = ['dept_name', 'salary_amount']
@@ -67,55 +67,56 @@ def preprocess_data():
                 top_salaries = (
                     current_emp.groupby("dept_name", group_keys=False)
                     .apply(lambda x: x.nlargest(10, "salary_amount"))
+                )
             except Exception as e:
-                st.error(f"خطأ في معالجة أعلى الرواتب: {str(e)}")
+                st.error(f"Error processing top salaries: {str(e)}")
     
     return salary_processed, top_salaries
 
 salary_processed, top_salaries = preprocess_data()
 
-# --- دالة مساعدة لحفظ المخططات ---
+# --- Helper function for saving plots ---
 def fig_to_image(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches='tight', dpi=300)
     buf.seek(0)
     return buf
 
-# --- واجهة التطبيق ---
-st.title("📊 لوحة تحليل الموارد البشرية")
+# --- Application Interface ---
+st.title("📊 HR Analytics Dashboard")
 
-# قسم تشخيص البيانات
-with st.expander("🔍 تشخيص البيانات"):
-    st.write("### الأعمدة المتاحة في كل مجموعة بيانات:")
-    st.write(f"بيانات الموظفين الحاليين: {list(current_emp.columns) if not current_emp.empty else 'فارغة'}")
-    st.write(f"بيانات الرواتب: {list(salary.columns) if not salary.empty else 'فارغة'}")
+# Data diagnostics section
+with st.expander("🔍 Data Diagnostics"):
+    st.write("### Available columns in each dataset:")
+    st.write(f"Current employees: {list(current_emp.columns) if not current_emp.empty else 'Empty'}")
+    st.write(f"Salary data: {list(salary.columns) if not salary.empty else 'Empty'}")
     
     if not current_emp.empty:
-        st.write("### عينة من بيانات الموظفين:")
+        st.write("### Sample employee data:")
         st.write(current_emp.head(3))
 
-# --- الأسئلة المدعومة ---
+# --- Supported Questions ---
 allowed_questions = {
     "top salaries": {
-        "description": "أعلى الرواتب حسب القسم",
+        "description": "Show top salaries by department",
         "required_cols": ['dept_name', 'salary_amount']
     },
     "salary growth": {
-        "description": "نمو الرواتب السنوي", 
+        "description": "Show annual salary growth", 
         "required_cols": ['growth_year', 'salary_growth']
     },
     "gender salary": {
-        "description": "متوسط الراتب حسب الجنس",
+        "description": "Show average salary by gender",
         "required_cols": ['gender', 'salary_amount']
     },
     "tenure salary": {
-        "description": "الخبرة مقابل الراتب",
+        "description": "Show salary vs tenure",
         "required_cols": ['tenure', 'salary_amount']
     }
 }
 
-# --- واجهة الأسئلة ---
-question = st.text_input("❓ اطرح سؤالاً عن بيانات الموظفين")
+# --- Question Interface ---
+question = st.text_input("❓ Ask a question about employee data")
 
 if question:
     q = question.lower()
@@ -123,14 +124,14 @@ if question:
     
     if matched:
         question_info = allowed_questions[matched[0]]
-        st.success(f"✅ جاري تحضير: {question_info['description']}")
+        st.success(f"✅ Preparing: {question_info['description']}")
         
-        # التحقق من وجود الأعمدة المطلوبة
+        # Check for required columns
         missing_cols = [col for col in question_info['required_cols'] 
                        if col not in current_emp.columns and col not in salary_processed.columns]
         
         if missing_cols:
-            st.error(f"الأعمدة المطلوبة غير موجودة: {missing_cols}")
+            st.error(f"Required columns missing: {missing_cols}")
         else:
             try:
                 fig, ax = plt.subplots(figsize=(10, 6))
@@ -139,33 +140,62 @@ if question:
                     if not top_salaries.empty:
                         plot_data = top_salaries.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
                         sns.barplot(data=plot_data, x="dept_name", y="salary_amount", ax=ax)
-                        ax.set_title("أعلى الرواتب حسب القسم")
+                        ax.set_title("Top Salaries by Department")
                         plt.xticks(rotation=45)
                 
                 elif "salary growth" in matched[0]:
                     if not salary_processed.empty:
                         plot_data = salary_processed.groupby("growth_year")["salary_growth"].mean().reset_index()
                         sns.lineplot(data=plot_data, x="growth_year", y="salary_growth", ax=ax, marker='o')
-                        ax.set_title("نمو الرواتب السنوي")
+                        ax.set_title("Annual Salary Growth")
                 
                 elif "gender salary" in matched[0]:
                     if not current_emp.empty:
                         sns.barplot(data=current_emp, x="gender", y="salary_amount", ax=ax, estimator='mean')
-                        ax.set_title("متوسط الراتب حسب الجنس")
+                        ax.set_title("Average Salary by Gender")
                 
                 elif "tenure salary" in matched[0]:
                     if not current_emp.empty:
                         current_emp_clean = current_emp.dropna(subset=["tenure", "salary_amount"])
                         sns.scatterplot(data=current_emp_clean, x="tenure", y="salary_amount", ax=ax)
-                        ax.set_title("الخبرة مقابل الراتب")
+                        ax.set_title("Salary vs Tenure")
                 
                 st.pyplot(fig)
-                st.download_button("⬇️ تحميل المخطط", data=fig_to_image(fig), 
+                st.download_button("⬇️ Download Chart", data=fig_to_image(fig), 
                                  file_name=f"{matched[0]}.png", mime="image/png")
                 
             except Exception as e:
-                st.error(f"حدث خطأ أثناء إنشاء المخطط: {str(e)}")
+                st.error(f"Error generating visualization: {str(e)}")
     else:
-        st.warning("السؤال غير مدعوم. الأسئلة المتاحة:")
+        st.warning("Question not supported. Available questions:")
         for q, info in allowed_questions.items():
             st.write(f"- {q}: {info['description']}")
+
+# --- Additional Analysis Sections ---
+st.sidebar.header("Additional Analysis Options")
+
+if st.sidebar.checkbox("Show Department Summary"):
+    if not department.empty and not current_emp.empty:
+        st.subheader("Department Summary")
+        dept_summary = current_emp.groupby('dept_name').agg(
+            employee_count=('employee_id', 'nunique'),
+            avg_salary=('salary_amount', 'mean')
+        ).sort_values('avg_salary', ascending=False)
+        st.dataframe(dept_summary.style.background_gradient(cmap='Blues'))
+
+if st.sidebar.checkbox("Show Salary Distribution"):
+    if not current_emp.empty:
+        st.subheader("Salary Distribution")
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.histplot(current_emp['salary_amount'], bins=30, kde=True, ax=ax)
+        ax.set_title("Salary Distribution Across Organization")
+        st.pyplot(fig)
+
+if st.sidebar.checkbox("Show Employee Tenure Analysis"):
+    if not current_emp.empty and 'tenure' in current_emp.columns:
+        st.subheader("Tenure Analysis")
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.boxplot(data=current_emp, x='dept_name', y='tenure', ax=ax)
+        ax.set_title("Employee Tenure by Department")
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
