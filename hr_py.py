@@ -7,74 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1BRPDra8Zdc_vshxER2aey6dnJ-HG5b7a
 """
 
-# Commented out IPython magic to ensure Python compatibility.
-# import streamlit as st
-# import pandas as pd
-# import joblib
-# 
-# # تحميل الموديل المدرب
-# model = joblib.load('risk_model.pkl')
-# 
-# # عنوان التطبيق
-# st.title("🎯 Employee Risk Prediction App")
-# 
-# st.write("Upload employee data to predict their risk score.")
-# 
-# # تحميل البيانات من المستخدم
-# uploaded_file = st.file_uploader("📤 Upload a CSV file", type=["csv"])
-# 
-# if uploaded_file is not None:
-#     data = pd.read_csv(uploaded_file)
-#     st.write("✅ Uploaded Data Preview:")
-#     st.write(data.head())
-# 
-#     # تحديد الأعمدة المطلوبة
-#     expected_cols = ['gender', 'title', 'dept_name', 'tenure', 'amount', 'num_promotions']
-# 
-#     # التحقق إن كل الأعمدة موجودة
-#     if all(col in data.columns for col in expected_cols):
-#         # التأكد من الترتيب
-#         input_data = data[expected_cols]
-# 
-#         # التعامل مع الترميز (لو دربتي الموديل على بيانات مش مرمزة قوليلي)
-#         # هنا بنفترض الترميز في مرحلة التدريب
-# 
-#         # التنبؤ
-#         predictions = model.predict(input_data)
-# 
-#         # عرض النتائج
-#         data['Predicted Risk'] = predictions
-#         st.success("✅ Predictions completed!")
-#         st.write(data)
-# 
-#         # تحميل النتائج
-#         csv = data.to_csv(index=False)
-#         st.download_button("⬇️ Download Results as CSV", data=csv, file_name="risk_predictions.csv", mime="text/csv")
-#     else:
-#         st.error("❌ Please upload a CSV file with the correct columns: " + ", ".join(expected_cols))
-# %%writefile app.py
-# import streamlit as st
-# import pandas as pd
-# import joblib
-# 
-# df = pd.read_csv("employee.csv")
-# 
-# model = joblib.load("rf_model.pkl")
-# 
-# st.title("🚨 HR Risk Prediction App")
-# 
-# row = st.selectbox("اختر رقم الموظف للتنبؤ بالمخاطر", df.index)
-# 
-# if st.button("تنبأ"):
-#     input_data = df.drop(columns=["risk_score"]).iloc[[row]]
-#     prediction = model.predict(input_data)[0]
-#     st.success(f"تقييم المخاطر المتوقع: {prediction}")
-#
-# --- Streamlit HR Analytics App ---
-# --- Streamlit HR Analytics App ---
-# --- Streamlit HR Analytics App ---
-# --- Streamlit HR Analytics App ---
-# --- HR Analytics Streamlit App ---
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -107,7 +39,7 @@ def load_data():
 current_emp_snapshot, department_employee, employee, department, salary, title, department_manager = load_data()
 
 # --- معالجة مسبقة للبيانات ---
-if not salary.empty:
+if not salary.empty and all(col in salary.columns for col in ['from_date', 'employee_id', 'amount']):
     salary['year'] = pd.to_datetime(salary['from_date']).dt.year
     salary_sorted = salary.sort_values(['employee_id', 'from_date'])
     salary_sorted['prev_salary'] = salary_sorted.groupby('employee_id')['amount'].shift(1)
@@ -115,24 +47,22 @@ if not salary.empty:
     salary_sorted['growth_year'] = pd.to_datetime(salary_sorted['from_date']).dt.year
 else:
     salary_sorted = pd.DataFrame()
+    st.warning("بيانات الرواتب غير متوفرة أو غير مكتملة")
 
-# أفضل الرواتب حسب القسم - مع التحقق من وجود الأعمدة
-if not current_emp_snapshot.empty:
-    required_columns = ['dept_name', 'salary_amount']
-    if all(col in current_emp_snapshot.columns for col in required_columns):
-        top_10 = current_emp_snapshot.groupby("dept_name", as_index=False).apply(
-            lambda x: x.nlargest(10, "salary_amount")
-        ).reset_index(drop=True)
-    else:
-        st.warning("البيانات لا تحتوي على الأعمدة المطلوبة لعرض أفضل الرواتب")
-        top_10 = pd.DataFrame()
+# أفضل الرواتب حسب القسم
+if not current_emp_snapshot.empty and all(col in current_emp_snapshot.columns for col in ['dept_name', 'salary_amount']):
+    top_10 = current_emp_snapshot.groupby("dept_name", as_index=False).apply(
+        lambda x: x.nlargest(10, "salary_amount")
+    ).reset_index(drop=True)
 else:
     top_10 = pd.DataFrame()
+    if not current_emp_snapshot.empty:
+        st.warning("بيانات الموظفين لا تحتوي على الأعمدة المطلوبة (dept_name أو salary_amount)")
 
 # --- دالة مساعدة لحفظ المخططات ---
 def fig_to_image(fig):
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches='tight')
+    fig.savefig(buf, format="png", bbox_inches='tight', dpi=300)
     buf.seek(0)
     return buf
 
@@ -140,12 +70,12 @@ def fig_to_image(fig):
 st.title("📊 لوحة تحليل الموارد البشرية")
 st.markdown("اطرح سؤالاً للحصول على رؤى مرئية من بيانات الموظفين")
 
-# عرض الأعمدة المتاحة لتصحيح الأخطاء
-if not current_emp_snapshot.empty:
-    with st.expander("عرض الأعمدة المتاحة في البيانات"):
-        st.write("أعمدة بيانات الموظفين الحاليين:", current_emp_snapshot.columns.tolist())
+# عرض البيانات المتاحة للتفتيش
+with st.expander("🔍 معاينة البيانات المتاحة"):
+    st.write("بيانات الموظفين الحاليين:", current_emp_snapshot.head(3) if not current_emp_snapshot.empty else "لا توجد بيانات")
+    st.write("بيانات الرواتب:", salary_sorted.head(3) if not salary_sorted.empty else "لا توجد بيانات")
 
-question = st.text_input("❓ اطرح سؤالاً عن بيانات الموظفين")
+question = st.text_input("❓ اطرح سؤالاً عن بيانات الموظفين (مثال: أعلى الرواتب، نمو الرواتب...)")
 
 # الأسئلة المدعومة
 allowed_questions = {
@@ -154,7 +84,8 @@ allowed_questions = {
     "salary growth": "نمو الرواتب السنوي",
     "average salary per gender": "متوسط الراتب حسب الجنس",
     "gender salary": "متوسط الراتب حسب الجنس",
-    "tenure vs salary": "الخبرة مقابل الراتب"
+    "tenure vs salary": "الخبرة مقابل الراتب",
+    "توزيع الرواتب": "توزيع الرواتب"
 }
 
 # --- معالجة الأسئلة ---
@@ -165,50 +96,77 @@ if question:
     if matched:
         chart_title = allowed_questions[matched[0]]
         st.success(f"✅ عرض مخطط لـ: {chart_title}")
-        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        try:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            plt.tight_layout()
+            
+            if "salary growth" in matched[0]:
+                if not salary_sorted.empty and 'growth_year' in salary_sorted.columns:
+                    avg_growth = salary_sorted.groupby("growth_year")["salary_growth"].mean().reset_index()
+                    sns.lineplot(data=avg_growth, x="growth_year", y="salary_growth", marker='o', ax=ax)
+                    ax.set_title("📈 متوسط نمو الرواتب السنوي")
+                    ax.set_xlabel("السنة")
+                    ax.set_ylabel("معدل النمو")
+                else:
+                    st.error("بيانات نمو الرواتب غير متوفرة أو غير مكتملة")
 
-        if "salary growth" in matched[0]:
-            if not salary_sorted.empty and 'growth_year' in salary_sorted.columns:
-                avg_growth = salary_sorted.groupby("growth_year")["salary_growth"].mean().reset_index()
-                sns.lineplot(data=avg_growth, x="growth_year", y="salary_growth", marker='o', ax=ax)
-                ax.set_title("📈 متوسط نمو الرواتب السنوي")
-                st.pyplot(fig)
-                st.download_button("⬇️ تحميل المخطط", data=fig_to_image(fig), file_name="salary_growth.png", mime="image/png")
-            else:
-                st.error("بيانات نمو الرواتب غير متوفرة أو غير مكتملة")
+            elif "top salaries" in matched[0] or "highest paid" in matched[0]:
+                if not top_10.empty:
+                    top10_plot = top_10.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
+                    sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax, palette="viridis")
+                    ax.set_title("🏆 أعلى الموظفين راتباً حسب القسم")
+                    ax.set_xlabel("القسم")
+                    ax.set_ylabel("الراتب")
+                    plt.xticks(rotation=45)
+                else:
+                    st.error("بيانات أعلى الرواتب غير متوفرة")
 
-        elif "top salaries" in matched[0] or "highest paid" in matched[0]:
-            if not top_10.empty and all(col in top_10.columns for col in ['dept_name', 'salary_amount']):
-                top10_plot = top_10.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
-                sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax)
-                ax.set_title("🏆 أعلى الموظفين راتباً حسب القسم")
-                plt.xticks(rotation=45)
-                st.pyplot(fig)
-                st.download_button("⬇️ تحميل المخطط", data=fig_to_image(fig), file_name="top_salaries.png", mime="image/png")
-            else:
-                st.error("بيانات أعلى الرواتب غير متوفرة أو غير مكتملة")
+            elif "gender salary" in matched[0]:
+                if not current_emp_snapshot.empty and all(col in current_emp_snapshot.columns for col in ['gender', 'salary_amount']):
+                    sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax, palette="coolwarm")
+                    ax.set_title("⚖️ متوسط الراتب حسب الجنس")
+                    ax.set_xlabel("الجنس")
+                    ax.set_ylabel("متوسط الراتب")
+                else:
+                    st.error("بيانات الرواتب حسب الجنس غير متوفرة")
 
-        elif "gender salary" in matched[0] or "average salary per gender" in matched[0]:
-            if not current_emp_snapshot.empty and all(col in current_emp_snapshot.columns for col in ['gender', 'salary_amount']):
-                sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
-                ax.set_title("⚖️ متوسط الراتب حسب الجنس")
-                st.pyplot(fig)
-                st.download_button("⬇️ تحميل المخطط", data=fig_to_image(fig), file_name="gender_salary.png", mime="image/png")
-            else:
-                st.error("بيانات الرواتب حسب الجنس غير متوفرة أو غير مكتملة")
+            elif "tenure vs salary" in matched[0]:
+                if not current_emp_snapshot.empty and all(col in current_emp_snapshot.columns for col in ['tenure', 'salary_amount']):
+                    current_emp_snapshot_clean = current_emp_snapshot.dropna(subset=["tenure", "salary_amount"])
+                    sns.scatterplot(data=current_emp_snapshot_clean, x="tenure", y="salary_amount", ax=ax, alpha=0.6)
+                    ax.set_title("📉 العلاقة بين الخبرة والراتب")
+                    ax.set_xlabel("سنوات الخبرة")
+                    ax.set_ylabel("الراتب")
+                else:
+                    st.error("بيانات الخبرة والرواتب غير متوفرة")
 
-        elif "tenure vs salary" in matched[0]:
-            if not current_emp_snapshot.empty and all(col in current_emp_snapshot.columns for col in ['tenure', 'salary_amount']):
-                current_emp_snapshot_clean = current_emp_snapshot.dropna(subset=["tenure", "salary_amount"])
-                sns.scatterplot(data=current_emp_snapshot_clean, x="tenure", y="salary_amount", ax=ax)
-                ax.set_title("📉 العلاقة بين الخبرة والراتب")
+            elif "توزيع الرواتب" in matched[0]:
+                if not current_emp_snapshot.empty and 'salary_amount' in current_emp_snapshot.columns:
+                    sns.histplot(current_emp_snapshot['salary_amount'], kde=True, ax=ax, bins=30)
+                    ax.set_title("📊 توزيع الرواتب")
+                    ax.set_xlabel("الراتب")
+                    ax.set_ylabel("عدد الموظفين")
+                else:
+                    st.error("بيانات الرواتب غير متوفرة")
+
+            # عرض المخطط إذا تم إنشاؤه بنجاح
+            if ax.has_data():
                 st.pyplot(fig)
-                st.download_button("⬇️ تحميل المخطط", data=fig_to_image(fig), file_name="tenure_vs_salary.png", mime="image/png")
+                st.download_button(
+                    label="⬇️ تحميل المخطط",
+                    data=fig_to_image(fig),
+                    file_name=f"{matched[0]}.png",
+                    mime="image/png"
+                )
             else:
-                st.error("بيانات الخبرة والرواتب غير متوفرة أو غير مكتملة")
+                st.warning("لا توجد بيانات لعرضها في المخطط")
+
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء إنشاء المخطط: {str(e)}")
 
     else:
-        st.warning("⚠️ هذا السؤال غير مدعوم أو البيانات المطلوبة غير متاحة")
+        st.warning("⚠️ هذا السؤال غير مدعوم أو غير واضح")
         st.write("الأسئلة المدعومة:")
         for q, desc in allowed_questions.items():
             st.write(f"- {q}: {desc}")
