@@ -263,3 +263,8 @@ if question:
 
     else:
         st.warning("⚠️ السؤال غير مفهوم. جرّب تكتبه بطريقة تانية.")
+try:
+    salary = pd.read_csv("salary_sample.csv")
+except FileNotFoundError:
+    st.error("❌ ملف salary_sample.csv غير موجود. برجاء رفعه أولاً.")
+    salary = pd.DataFrame()  # أو ممكن تعملي exit أو st.stop()
