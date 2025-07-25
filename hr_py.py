@@ -73,34 +73,36 @@ Original file is located at
 # --- Streamlit HR Analytics App ---
 # --- Streamlit HR Analytics App ---
 # --- Streamlit HR Analytics App ---
+# --- Streamlit HR Analytics App ---
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# --- تحميل البيانات ---
+st.set_page_config(page_title="HR Chat Insights", layout="wide")
+
+# --- Load Data ---
 @st.cache_data
 def load_data():
     def try_read(file):
         try:
             return pd.read_csv(file)
-        except FileNotFoundError:
+        except:
             return pd.DataFrame()
-
+    
     return (
         try_read("current_employee_snapshot.csv"),
         try_read("department_employee.csv"),
         try_read("employee.csv"),
         try_read("department.csv"),
-        try_read("salary.csv"),
+        try_read("salary_sample.csv"),
         try_read("title.csv"),
         try_read("department_manager.csv")
     )
 
-# تحميل كل الملفات
 current_emp_snapshot, department_employee, employee, department, salary, title, department_manager = load_data()
 
-# تجهيز البيانات الثانوية
+# --- Salary Preprocessing ---
 if not salary.empty:
     salary['year'] = pd.to_datetime(salary['from_date']).dt.year
     salary_sorted = salary.sort_values(['employee_id', 'from_date'])
@@ -110,29 +112,30 @@ if not salary.empty:
 else:
     salary_sorted = pd.DataFrame()
 
+# --- Top 10 by Department ---
 if not current_emp_snapshot.empty:
-    top_10 = current_emp_snapshot.groupby("dept_name").apply(lambda x: x.sort_values("salary_amount", ascending=False).head(10))
+    top_10 = current_emp_snapshot.groupby("dept_name").apply(
+        lambda x: x.sort_values("salary_amount", ascending=False).head(10)
+    ).reset_index(drop=True)
 else:
     top_10 = pd.DataFrame()
 
-# --- واجهة التطبيق ---
-st.set_page_config(layout="wide")
-st.title("📊 HR Insights Chat App")
+# --- Sidebar ---
+st.title("🧑‍💼 HR Chat Insight App")
+st.sidebar.header("💬 Ask Multiple Questions")
+questions_input = st.sidebar.text_area("❓ Ask your questions (one per line)", height=200)
 
-st.markdown("👩‍💼 Ask questions about your HR data and get instant insights with charts.")
-user_input = st.text_area("📝 Type your questions below (separated by commas or lines):", height=150)
-
-# --- قائمة الأسئلة المسموحة ---
+# --- Allowed Keywords ---
 allowed_questions = {
-    "salary growth": "Salary growth over the years",
-    "top salaries": "Top salaries by department",
-    "highest paid": "Top salaries by department",
-    "average salary per gender": "Average salary per gender",
-    "gender salary": "Average salary per gender",
-    "tenure vs salary": "Tenure vs Salary Scatter Plot"
+    "salary growth": "Average Salary Growth per Year",
+    "top salaries": "Top Salaries by Department",
+    "highest paid": "Top Salaries by Department",
+    "average salary per gender": "Average Salary per Gender",
+    "gender salary": "Average Salary per Gender",
+    "tenure vs salary": "Tenure vs Salary"
 }
 
-# --- عرض الرسوم ---
+# --- Chart Logic ---
 def render_chart(keyword):
     if keyword == "salary growth" and not salary_sorted.empty:
         fig, ax = plt.subplots(figsize=(10, 4))
@@ -142,45 +145,46 @@ def render_chart(keyword):
 
     elif keyword in ["top salaries", "highest paid"] and not top_10.empty:
         fig, ax = plt.subplots(figsize=(12, 5))
-        top10_plot = top_10.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
-        sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax)
+        top_plot = top_10.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
+        sns.barplot(data=top_plot, x="dept_name", y="salary_amount", ax=ax)
         ax.set_title("Top Salaries by Department")
         plt.xticks(rotation=45)
         st.pyplot(fig)
 
-    elif keyword in ["gender salary", "average salary per gender"] and not current_emp_snapshot.empty:
+    elif keyword in ["average salary per gender", "gender salary"] and not current_emp_snapshot.empty:
         fig, ax = plt.subplots()
         sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
         ax.set_title("Average Salary per Gender")
         st.pyplot(fig)
 
     elif keyword == "tenure vs salary" and not current_emp_snapshot.empty:
-        if "tenure" in current_emp_snapshot.columns:
+        if "tenure" in current_emp_snapshot.columns and "salary_amount" in current_emp_snapshot.columns:
+            df = current_emp_snapshot.dropna(subset=["tenure", "salary_amount"]).copy()
+            df = df[pd.to_numeric(df["tenure"], errors="coerce").notna()]
+            df = df[pd.to_numeric(df["salary_amount"], errors="coerce").notna()]
+            df["tenure"] = df["tenure"].astype(float)
+            df["salary_amount"] = df["salary_amount"].astype(float)
+
             fig, ax = plt.subplots()
-            sns.scatterplot(data=current_emp_snapshot, x="tenure", y="salary_amount", ax=ax)
+            sns.scatterplot(data=df, x="tenure", y="salary_amount", ax=ax)
             ax.set_title("Tenure vs Salary")
             st.pyplot(fig)
         else:
-            st.warning("⚠️ 'tenure' column not found in the dataset.")
+            st.warning("⚠️ 'tenure' or 'salary_amount' column not found.")
 
-# --- تحليل الأسئلة ---
-if user_input:
-    st.divider()
-    questions = [q.strip().lower() for q in user_input.replace('\n', ',').split(',') if q.strip()]
-    valid = False
-
-    for q in questions:
+# --- Handle Questions ---
+if questions_input:
+    questions = [q.strip().lower() for q in questions_input.splitlines() if q.strip()]
+    for question in questions:
         found = False
-        for key in allowed_questions:
-            if key in q:
-                st.subheader(f"📌 {allowed_questions[key]}")
+        for key in allowed_questions.keys():
+            if key in question:
+                st.markdown(f"### ✅ Showing chart for: **{allowed_questions[key]}**")
                 render_chart(key)
                 found = True
-                valid = True
                 break
         if not found:
-            st.warning(f"❌ Sorry, this question is not recognized: **{q}**")
+            st.warning(f"❌ Unsupported question: '{question}' – Please rephrase or choose a supported one.")
 
-    if not valid:
-        st.info("💡 Try asking questions like: 'salary growth', 'top salaries', 'tenure vs salary', etc.")
-
+else:
+    st.info("📝 Please enter your questions in the sidebar.")
