@@ -71,8 +71,6 @@ Original file is located at
 #     st.success(f"تقييم المخاطر المتوقع: {prediction}")
 #
 
-!pip install streamlit pyngrok joblib
-
 from pyngrok import ngrok
 import os
 
