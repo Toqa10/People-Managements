@@ -75,81 +75,87 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
-import joblib
 
-st.set_page_config(page_title="Employee Risk & Insights App", layout="wide")
-st.title("💼 HR Insights and Risk Prediction")
+st.set_page_config(page_title="Employee Insights Chat", layout="wide")
+st.title("💬 Ask About Employee Data")
 
-# Load model
-@st.cache_resource
-def load_model():
-    return joblib.load("risk_model.pkl")
+# ✨ Suggested questions (with buttons)
+example_questions = [
+    "top salaries",
+    "top 10 departments with avg salary",
+    "top department",
+    "average salary per year",
+    "salary growth",
+    "most common age group",
+    "turnover",
+    "tenure vs salary",
+    "total salary",
+    "salary overall distribution",
+    "average salary per title",
+    "gender salary",
+    "employee distribution by title",
+    "department switch"
+]
 
-# Load data
+with st.expander("💡 Suggested Questions (Click to autofill)"):
+    cols = st.columns(3)
+    for i, question in enumerate(example_questions):
+        if cols[i % 3].button(question):
+            st.session_state["auto_question"] = question
+
+# --- Question input ---
+question = st.text_input("❓ Type your question here:", value=st.session_state.get("auto_question", ""))
+st.session_state["auto_question"] = ""  # Reset after use
+
 @st.cache_data
 def load_data():
     current_emp_snapchat = pd.read_csv("current_employee_snapshot.csv")
     department_employee = pd.read_csv("department_employee.csv")
     employee = pd.read_csv("employee.csv")
     department = pd.read_csv("department.csv")
-    salary = pd.read_csv("salary.csv")
+    salary = pd.read_csv("salary_sample.csv")  # استخدمي النسخة المصغرة هنا
     title = pd.read_csv("title.csv")
     department_manager = pd.read_csv("department_manager.csv")
     return current_emp_snapchat, department_employee, employee, department, salary, title, department_manager
 
-model = load_model()
+# Load data
 current_emp_snapchat, department_employee, employee, department, salary, title, department_manager = load_data()
 
-# --- Risk Prediction Section ---
-st.header("🎯 Upload Employee Data to Predict Risk")
-uploaded_file = st.file_uploader("📤 Upload a CSV file", type=["csv"], key="risk")
+# ✂️ باقي الكود زي ما كتبتيه انتِ بنفس ترتيب الشارتات والأسئلة في if-elif...
 
-if uploaded_file:
-    data = pd.read_csv(uploaded_file)
-    expected_cols = ['gender', 'title', 'dept_name', 'tenure', 'amount', 'num_promotions']
-    if all(col in data.columns for col in expected_cols):
-        input_data = data[expected_cols]
-        preds = model.predict(input_data)
-        data['Predicted Risk'] = preds
-        st.success("✅ Predictions Done!")
-        st.dataframe(data)
-        csv = data.to_csv(index=False).encode('utf-8')
-        st.download_button("⬇️ Download Results as CSV", data=csv, file_name="risk_predictions.csv")
-    else:
-        st.error("❌ CSV must include columns: " + ", ".join(expected_cols))
+# بعد كل شروط السؤال بنهاية الكود، خليه زي ما هو:
 
-# --- Insights Section ---
-st.header("💬 Ask a Question About HR Data")
-question = st.text_input("Type your question below:")
+else:
+    st.warning("⚠️ Your question was not recognized. Try a different phrasing.")
 
-# Add your logic here to respond to questions like in your previous script
-# Example:
-if question:
-    q = question.lower()
-    if "top salaries" in q:
-        st.write("📌 Top 10 Highest Paid Employees Coming Soon...")
-    else:
-        st.warning("⚠️ Question not recognized. Try rephrasing.")
+# --- Input for employee ID to show salary trend ---
+st.markdown("---")
+employee_id_input = st.text_input("🔍 Enter employee ID to see salary progression:")
 
-# --- Optional: Employee Salary Trend ---
-st.header("📈 Check Employee Salary Trend")
-emp_id_input = st.text_input("Enter Employee ID:", key="salary")
-
-if emp_id_input:
+if employee_id_input:
     try:
-        emp_id = int(emp_id_input)
+        emp_id = int(employee_id_input)
         salary['from_date'] = pd.to_datetime(salary['from_date'])
-        emp_data = salary[salary['employee_id'] == emp_id]
-        if not emp_data.empty:
-            st.dataframe(emp_data)
+        salary['year'] = salary['from_date'].dt.year
+        salary = salary.sort_values(by=['employee_id', 'from_date'])
+        salary['salary_growth'] = salary.groupby('employee_id')['amount'].diff()
+
+        emp_salary = salary[salary["employee_id"] == emp_id]
+
+        if not emp_salary.empty:
+            st.write(f"📈 Salary progression for employee ID {emp_id}:")
+            st.dataframe(emp_salary[["from_date", "amount", "salary_growth"]])
+
             fig, ax = plt.subplots()
-            ax.plot(emp_data['from_date'], emp_data['amount'], marker='o')
-            ax.set_title(f"Salary Over Time for Employee {emp_id}")
-            ax.set_xlabel("Date")
-            ax.set_ylabel("Salary")
+            ax.plot(emp_salary["from_date"], emp_salary["amount"], marker='o', label='Salary')
+            ax.set_title(f'Salary Over Time for Employee {emp_id}')
+            ax.set_xlabel('Date')
+            ax.set_ylabel('Salary')
             ax.grid(True)
             st.pyplot(fig)
         else:
-            st.warning("No salary data found for this employee.")
+            st.warning("❌ No data found for this employee.")
     except ValueError:
+        st.warning("⚠️ Please enter a valid numeric employee ID.")
+
         st.warning("Please enter a valid numeric ID.")
