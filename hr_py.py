@@ -78,49 +78,29 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# --- Load Data ---
+# --- تحميل البيانات ---
 @st.cache_data
 def load_data():
-    try:
-        current_emp_snapshot = pd.read_csv("current_employee_snapshot.csv")
-    except FileNotFoundError:
-        current_emp_snapshot = pd.DataFrame()
+    def try_read(file):
+        try:
+            return pd.read_csv(file)
+        except FileNotFoundError:
+            return pd.DataFrame()
 
-    try:
-        department_employee = pd.read_csv("department_employee.csv")
-    except FileNotFoundError:
-        department_employee = pd.DataFrame()
+    return (
+        try_read("current_employee_snapshot.csv"),
+        try_read("department_employee.csv"),
+        try_read("employee.csv"),
+        try_read("department.csv"),
+        try_read("salary_sample.csv"),
+        try_read("title.csv"),
+        try_read("department_manager.csv")
+    )
 
-    try:
-        employee = pd.read_csv("employee.csv")
-    except FileNotFoundError:
-        employee = pd.DataFrame()
-
-    try:
-        department = pd.read_csv("department.csv")
-    except FileNotFoundError:
-        department = pd.DataFrame()
-
-    try:
-        salary = pd.read_csv("salary.csv")
-    except FileNotFoundError:
-        salary = pd.DataFrame()
-
-    try:
-        title = pd.read_csv("title.csv")
-    except FileNotFoundError:
-        title = pd.DataFrame()
-
-    try:
-        department_manager = pd.read_csv("department_manager.csv")
-    except FileNotFoundError:
-        department_manager = pd.DataFrame()
-
-    return current_emp_snapshot, department_employee, employee, department, salary, title, department_manager
-
+# تحميل كل الملفات
 current_emp_snapshot, department_employee, employee, department, salary, title, department_manager = load_data()
 
-# --- Merge for analysis ---
+# تجهيز البيانات الثانوية
 if not salary.empty:
     salary['year'] = pd.to_datetime(salary['from_date']).dt.year
     salary_sorted = salary.sort_values(['employee_id', 'from_date'])
@@ -130,72 +110,77 @@ if not salary.empty:
 else:
     salary_sorted = pd.DataFrame()
 
-# Merge for tenure/salary analysis
-merged = salary.merge(title, on='employee_id') if not salary.empty and not title.empty else pd.DataFrame()
-
-# --- Top 10 highest-paid employees per department ---
 if not current_emp_snapshot.empty:
     top_10 = current_emp_snapshot.groupby("dept_name").apply(lambda x: x.sort_values("salary_amount", ascending=False).head(10))
 else:
     top_10 = pd.DataFrame()
 
-# --- Sidebar ---
-st.title("🧑‍💼 HR Analytics Chat App")
-st.sidebar.header("Upload Employee Data to Predict Risk")
-st.sidebar.file_uploader("📤 Upload a CSV file", type="csv")
-question = st.sidebar.text_input("❓ Ask a question about the data")
+# --- واجهة التطبيق ---
+st.set_page_config(layout="wide")
+st.title("📊 HR Insights Chat App")
 
-# --- Insights Logic ---
-allowed_questions = [
-    "top salaries", "highest paid", "top 10 departments with avg salary",
-    "top department", "highest average", "average salary year",
-    "salary growth", "salary change", "age group", "most common age",
-    "turnover", "average tenure", "department tenure", "tenure vs salary",
-    "total salary", "department spending", "salary distribution",
-    "salary overall distribution", "salary histogram", "average salary per title",
-    "title salary", "gender salary", "average salary per gender",
-    "employee distribution", "title distribution", "department switch",
-    "moved departments", "switching departments"
-]
+st.markdown("👩‍💼 Ask questions about your HR data and get instant insights with charts.")
+user_input = st.text_area("📝 Type your questions below (separated by commas or lines):", height=150)
 
-if question:
-    q = question.lower()
+# --- قائمة الأسئلة المسموحة ---
+allowed_questions = {
+    "salary growth": "Salary growth over the years",
+    "top salaries": "Top salaries by department",
+    "highest paid": "Top salaries by department",
+    "average salary per gender": "Average salary per gender",
+    "gender salary": "Average salary per gender",
+    "tenure vs salary": "Tenure vs Salary Scatter Plot"
+}
 
-    if any(key in q for key in allowed_questions):
-        st.success(f"✅ Showing chart for: {question}")
+# --- عرض الرسوم ---
+def render_chart(keyword):
+    if keyword == "salary growth" and not salary_sorted.empty:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        sns.lineplot(data=salary_sorted, x="growth_year", y="salary_growth", ax=ax)
+        ax.set_title("Average Salary Growth per Year")
+        st.pyplot(fig)
 
-        # Auto chart rendering
-        if "salary growth" in q:
-            if not salary_sorted.empty:
-                fig, ax = plt.subplots(figsize=(10, 4))
-                sns.lineplot(data=salary_sorted, x="growth_year", y="salary_growth", ax=ax)
-                ax.set_title("Average Salary Growth per Year")
-                st.pyplot(fig)
+    elif keyword in ["top salaries", "highest paid"] and not top_10.empty:
+        fig, ax = plt.subplots(figsize=(12, 5))
+        top10_plot = top_10.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
+        sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax)
+        ax.set_title("Top Salaries by Department")
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
 
-        elif "top salaries" in q or "highest paid" in q:
-            if not top_10.empty:
-                fig, ax = plt.subplots(figsize=(12, 5))
-                top10_plot = top_10.groupby("dept_name").head(1).sort_values("salary_amount", ascending=False)
-                sns.barplot(data=top10_plot, x="dept_name", y="salary_amount", ax=ax)
-                ax.set_title("Top Salaries by Department")
-                plt.xticks(rotation=45)
-                st.pyplot(fig)
+    elif keyword in ["gender salary", "average salary per gender"] and not current_emp_snapshot.empty:
+        fig, ax = plt.subplots()
+        sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
+        ax.set_title("Average Salary per Gender")
+        st.pyplot(fig)
 
-        elif "average salary per gender" in q or "gender salary" in q:
-            if not current_emp_snapshot.empty:
-                fig, ax = plt.subplots()
-                sns.barplot(data=current_emp_snapshot, x="gender", y="salary_amount", estimator='mean', ax=ax)
-                ax.set_title("Average Salary per Gender")
-                st.pyplot(fig)
+    elif keyword == "tenure vs salary" and not current_emp_snapshot.empty:
+        if "tenure" in current_emp_snapshot.columns:
+            fig, ax = plt.subplots()
+            sns.scatterplot(data=current_emp_snapshot, x="tenure", y="salary_amount", ax=ax)
+            ax.set_title("Tenure vs Salary")
+            st.pyplot(fig)
+        else:
+            st.warning("⚠️ 'tenure' column not found in the dataset.")
 
-        elif "tenure vs salary" in q:
-            if not current_emp_snapshot.empty:
-                fig, ax = plt.subplots()
-                sns.scatterplot(data=current_emp_snapshot, x="tenure", y="salary_amount", ax=ax)
-                ax.set_title("Tenure vs Salary")
-                st.pyplot(fig)
+# --- تحليل الأسئلة ---
+if user_input:
+    st.divider()
+    questions = [q.strip().lower() for q in user_input.replace('\n', ',').split(',') if q.strip()]
+    valid = False
 
-        # Add more elif blocks here for other supported questions if needed
+    for q in questions:
+        found = False
+        for key in allowed_questions:
+            if key in q:
+                st.subheader(f"📌 {allowed_questions[key]}")
+                render_chart(key)
+                found = True
+                valid = True
+                break
+        if not found:
+            st.warning(f"❌ Sorry, this question is not recognized: **{q}**")
 
-    else:
-        st.warning("⚠️ This question is not supported. Please rephrase or ask a different question.")
+    if not valid:
+        st.info("💡 Try asking questions like: 'salary growth', 'top salaries', 'tenure vs salary', etc.")
+
